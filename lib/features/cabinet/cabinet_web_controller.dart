@@ -352,10 +352,15 @@ class CabinetWebController extends ChangeNotifier {
         }
         final relayout = relayoutOnNextSync;
         relayoutOnNextSync = false;
+        mark('開始套用 ${next.length} 顆櫃子到網頁（牆：${next.map((p) => '${p.productNo}=${p.wall ?? 'back'}').join('、')}）');
         final r = await applyDraft(
             {'cabinets': [for (final p in next) _draftCabinet(p)]},
             clear: true,
             relayout: relayout);
+        mark('排牆結果：${[
+          for (final a in (r['added'] is List ? r['added'] as List : const []))
+            if (a is Map) '${a['productNo']}→${a['wallPlaced']}'
+        ].join('；')}');
         if (r['ok'] != true) {
           final missing = (r['missing'] as List?)?.join('、') ?? '';
           error = missing.isNotEmpty
@@ -735,6 +740,7 @@ class CabinetWebController extends ChangeNotifier {
               // 從聊天打開配置頁：先預填案件欄位，再把已選的櫃子灌進場景
               await _applyPrefillOrderInfo();
               final init = _initialCabinets;
+              mark('就緒後待帶入的櫃子：${init?.length ?? '無（null）'}');
               _initialCabinets = null;
               if (init != null) {
                 await syncCabinets(init);

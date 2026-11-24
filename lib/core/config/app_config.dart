@@ -198,8 +198,18 @@ class AppConfig extends ChangeNotifier {
       return;
     }
     // 第一次升級：把舊的單一 MCP 設定轉成清單第一筆
+    // .env 的 MCP_BASE_URL 若是完整網址（含 https、網站代理路徑）就原樣使用，
+    // 不然才用 host／port／path 拼成 http；MCP_PROXY_KEY 是走網站代理時的 X-Mcp-Proxy-Key
+    final envUrl = (dotenv.maybeGet('MCP_BASE_URL') ?? '').trim();
+    final useEnvUrl = _prefs.getString(_kMcpHost) == null &&
+        McpServerModel.isValidUrl(envUrl);
     _mcpServers = [
-      McpServerModel(id: 'default', name: '預設', url: mcpBaseUrl),
+      McpServerModel(
+        id: 'default',
+        name: '預設',
+        url: useEnvUrl ? envUrl : mcpBaseUrl,
+        apiKey: (dotenv.maybeGet('MCP_PROXY_KEY') ?? '').trim(),
+      ),
     ];
     await _saveMcpServers();
   }
