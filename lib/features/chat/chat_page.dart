@@ -155,13 +155,14 @@ class _ChatPageState extends State<ChatPage> {
           ..clear()
           ..addAll(items);
       });
-      // 使用者在配置頁改了：背景頁也要重算預設值與報價
-      unawaited(_quote.syncBackground(List.of(_picked)));
+      // 使用者在配置頁改了：背景頁也要重算預設值與報價（配置頁開著時等關掉後再補算）
+      if (!_configWebOpen) unawaited(_quote.syncBackground(List.of(_picked)));
     };
     // 配置畫面按「發送到聊天」：把排好的櫃子（含位置）組成一則訊息送進聊天
     GetIt.instance<CabinetWebController>().onSendToChat = _onSendToChat;
     _quote.onSynced = _onQuoteSynced;
     _quote.addListener(_onQuoteChanged);
+    GetIt.instance<CabinetWebController>().addListener(_onConfigWebChanged);
     // 除錯版才有：自動化測試用的輸入口（可輸入中文），release 不會啟用
     if (kDebugMode) {
       _testInputTimer = startTestInputWatcher(
@@ -586,7 +587,27 @@ class _ChatPageState extends State<ChatPage> {
   void _syncPickedToConfig() {
     unawaited(GetIt.instance<CabinetWebController>()
         .syncCabinets(List.of(_picked)));
-    unawaited(_quote.syncBackground(List.of(_picked)));
+    // 配置頁開著時不開背景報價頁（見 _onConfigWebChanged），關掉配置頁後會補算
+    if (!_configWebOpen) unawaited(_quote.syncBackground(List.of(_picked)));
+  }
+
+  /// 系統櫃配置頁（不含挑選頁、修改訂單頁）目前是不是開著
+  bool _configWebOpen = false;
+
+  /// 配置頁開著時把背景報價頁收掉：兩個重量級網頁（各自載入全部參數模型、跑 3D 與報價）
+  /// 同時跑，手機上會互相拖慢。模擬器實測同一份工作，背景頁單獨約 27 秒，
+  /// 和配置頁同時跑時配置頁拖到約 116 秒。配置頁的標題列本來就會顯示價格；
+  /// 配置頁關掉後再把背景報價補算回來。
+  void _onConfigWebChanged() {
+    final web = GetIt.instance<CabinetWebController>();
+    final open = web.isOpen && !web.pickMode && !web.editMode;
+    if (open == _configWebOpen) return;
+    _configWebOpen = open;
+    if (open) {
+      _quote.close();
+    } else if (mounted && _picked.isNotEmpty) {
+      unawaited(_quote.syncBackground(List.of(_picked)));
+    }
   }
 
   // ── 背景配置頁：預設值與報價 ──
@@ -1418,6 +1439,7 @@ class _ChatPageState extends State<ChatPage> {
     _testInputTimer?.cancel();
     _quote.onSynced = null;
     _quote.removeListener(_onQuoteChanged);
+    GetIt.instance<CabinetWebController>().removeListener(_onConfigWebChanged);
     _skillStore.removeListener(_onSkillChanged);
     _ctrl.dispose();
     _scroll.dispose();
