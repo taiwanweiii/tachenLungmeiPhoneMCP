@@ -128,6 +128,25 @@ class CabinetWebController extends ChangeNotifier {
   Uri? targetUri;
   CabinetTransport? transport;
 
+  /// 載入過程的時間軸（除錯用，顯示在載入中的畫面上）：每筆是「+秒數 事件」
+  final List<String> trace = [];
+  final Stopwatch _traceClock = Stopwatch();
+
+  /// 記一筆載入事件；[reset] 時從頭開始計時
+  void mark(String event, {bool reset = false}) {
+    if (reset) {
+      trace.clear();
+      _traceClock
+        ..reset()
+        ..start();
+    }
+    final sec = (_traceClock.elapsedMilliseconds / 1000).toStringAsFixed(1);
+    trace.add('+${sec}s $event');
+    if (trace.length > 12) trace.removeAt(0);
+    debugPrint('⏱ cabinet +${sec}s $event');
+    notifyListeners();
+  }
+
   /// 聊天的文字對話區在螢幕上的位置（由 DockRegion 回報）。
   /// docked 模式的視窗會貼在這個範圍裡；沒有（聊天頁不在畫面上）就改成全螢幕。
   Rect? _dockRect;
@@ -529,6 +548,7 @@ class CabinetWebController extends ChangeNotifier {
       return;
     }
     _abandonSync();
+    mark('開始載入 ${uri.host}${uri.path}', reset: true);
     targetUri = uri;
     pickMode = uri.queryParameters['mode'] == 'pick';
     editMode = uri.queryParameters['mode'] == 'edit';
@@ -621,6 +641,7 @@ class CabinetWebController extends ChangeNotifier {
   Future<void> onPageLoaded() async {
     final t = transport;
     if (t == null) return;
+    mark('網頁載入完成（onLoadStop）');
     // 第一次載入完：確認網頁已登入，沒登入就用 MCP 登入時記下的工號密碼登入，再重載
     // 挑選頁、修改訂單頁是公開頁，不需要登入
     if (!_loginTried && !lightPage) {
@@ -638,6 +659,7 @@ class CabinetWebController extends ChangeNotifier {
   }
 
   void onLoadError(String message) {
+    mark('錯誤：$message');
     loading = false;
     error = message;
     notifyListeners();
@@ -672,10 +694,12 @@ class CabinetWebController extends ChangeNotifier {
       if (t == null) return;
       try {
         if (await t.hasBridge()) {
+          mark('橋接已掛上，等網頁初始化');
           // 讓網頁開始初始化（編輯既有案件時會在這裡載入櫃體），等它回報完成
           final ready = await call('whenReady');
           if (token != _bridgeWaitToken) return;
           if (ready['ok'] == true) {
+            mark('網頁就緒');
             pageReady = true;
             final order = _orderToLoad;
             if (editMode && order != null) {

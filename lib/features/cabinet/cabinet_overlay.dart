@@ -116,6 +116,30 @@ class _Panel extends StatelessWidget {
                           child: Center(child: CircularProgressIndicator()),
                         ),
                       ),
+                    if ((c.loading || !c.pageReady) &&
+                        mode != CabinetPanelMode.mini &&
+                        c.trace.isNotEmpty)
+                      Positioned(
+                        left: 8,
+                        right: 8,
+                        top: 8,
+                        child: IgnorePointer(
+                          child: Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: BoxDecoration(
+                              color: const Color(0xCC000000),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              c.trace.join('\n'),
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 11,
+                                  height: 1.3),
+                            ),
+                          ),
+                        ),
+                      ),
                     if (c.error != null && mode != CabinetPanelMode.mini)
                       Positioned(
                         left: 8,
@@ -281,6 +305,10 @@ class _Web extends StatelessWidget {
           },
         );
       },
+      onLoadStart: (ctrl, url) => c.mark('開始請求 ${url?.host ?? ''}${url?.path ?? ''}'),
+      onProgressChanged: (ctrl, p) {
+        if (p == 50 || p == 100) c.mark('載入進度 $p%');
+      },
       onLoadStop: (ctrl, url) => c.onPageLoaded(),
       onReceivedError: (ctrl, request, error) {
         if (request.isForMainFrame ?? false) {
@@ -290,7 +318,7 @@ class _Web extends StatelessWidget {
           if (error.type == WebResourceErrorType.CANCELLED ||
               d.contains('cancel') ||
               error.description.contains('取消')) {
-            debugPrint('[web] 導覽被取消（忽略）：${error.description}');
+            c.mark('導覽被取消（忽略）');
             return;
           }
           c.onLoadError('無法載入網頁：${error.description}');
