@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'voice_input.dart';
@@ -44,20 +45,26 @@ class MobileVoiceInput implements VoiceInput {
 
   @override
   Future<void> initialize() async {
-    // Step 1：麥克風權限
-    var status = await Permission.microphone.status;
-    if (!status.isGranted) {
-      status = await Permission.microphone.request();
-    }
-    if (!status.isGranted) {
-      throw Exception('麥克風權限未開啟，語音功能無法使用');
+    // Step 1：麥克風權限。iOS 由原生端的 isAvailable 一併申請（語音辨識 + 麥克風），
+    // permission_handler 在 iOS 沒設定 PERMISSION_MICROPHONE 巨集時永遠回傳未授權
+    if (defaultTargetPlatform != TargetPlatform.iOS) {
+      var status = await Permission.microphone.status;
+      if (!status.isGranted) {
+        status = await Permission.microphone.request();
+      }
+      if (!status.isGranted) {
+        throw Exception('麥克風權限未開啟，語音功能無法使用');
+      }
     }
 
-    // Step 2：確認裝置支援 STT
+    // Step 2：確認裝置支援 STT（iOS 在這裡跳出權限詢問）
+    // iOS 沒給權限時原生端回 false，給明確的說法
     final available =
         await _channel.invokeMethod<bool>('isAvailable') ?? false;
     if (!available) {
-      throw Exception('此裝置不支援語音辨識');
+      throw Exception(defaultTargetPlatform == TargetPlatform.iOS
+          ? '語音辨識或麥克風權限未開啟，請到「設定」開啟'
+          : '此裝置不支援語音辨識');
     }
 
     _ready = true;

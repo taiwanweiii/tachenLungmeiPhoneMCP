@@ -163,6 +163,25 @@ class MobileVoiceOutput {
   MobileVoiceOutput({this.language = 'zh-TW'});
 
   Future<void> initialize() async {
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+      // iOS 預設的音訊類別會被靜音開關擋掉、錄音之後也可能沒聲音：
+      // 用 playAndRecord + 預設走喇叭，跟原生語音辨識共用同一個 Session
+      try {
+        await _tts.setSharedInstance(true);
+        await _tts.setIosAudioCategory(
+          IosTextToSpeechAudioCategory.playAndRecord,
+          [
+            IosTextToSpeechAudioCategoryOptions.defaultToSpeaker,
+            IosTextToSpeechAudioCategoryOptions.allowBluetooth,
+            IosTextToSpeechAudioCategoryOptions.allowBluetoothA2DP,
+            IosTextToSpeechAudioCategoryOptions.mixWithOthers,
+          ],
+          IosTextToSpeechAudioMode.defaultMode,
+        );
+      } catch (e) {
+        debugPrint('🔇 iOS 音訊類別設定失敗：$e');
+      }
+    }
     await _tts.setLanguage(language);
     await setRate(_rate);
     await _tts.setVolume(1.0);
