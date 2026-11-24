@@ -130,6 +130,9 @@ class CabinetWebController extends ChangeNotifier {
 
   /// 載入過程的時間軸（除錯用，顯示在載入中的畫面上）：每筆是「+秒數 事件」
   final List<String> trace = [];
+
+  /// 這次開啟已經因「導覽被取消」自動重載過幾次（每次 _open 歸零）
+  int cancelRetries = 0;
   final Stopwatch _traceClock = Stopwatch();
 
   /// 記一筆載入事件；[reset] 時從頭開始計時
@@ -548,6 +551,7 @@ class CabinetWebController extends ChangeNotifier {
       return;
     }
     _abandonSync();
+    cancelRetries = 0;
     mark('開始載入 ${uri.host}${uri.path}', reset: true);
     targetUri = uri;
     pickMode = uri.queryParameters['mode'] == 'pick';

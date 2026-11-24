@@ -308,6 +308,15 @@ class _Web extends StatelessWidget {
       onLoadStart: (ctrl, url) => c.mark('開始請求 ${url?.host ?? ''}${url?.path ?? ''}'),
       onProgressChanged: (ctrl, p) {
         if (p == 50 || p == 100) c.mark('載入進度 $p%');
+        if (p == 100) {
+          // 進度到 100% 卻一直沒有 onLoadStop：4 秒後仍在轉圈就當作載入完成
+          Future.delayed(const Duration(seconds: 4), () {
+            if (c.loading && c.targetUri != null) {
+              c.mark('沒收到 onLoadStop，改用進度 100% 判定載入完成');
+              c.onPageLoaded();
+            }
+          });
+        }
       },
       onLoadStop: (ctrl, url) => c.onPageLoaded(),
       onReceivedError: (ctrl, request, error) {
@@ -318,7 +327,17 @@ class _Web extends StatelessWidget {
           if (error.type == WebResourceErrorType.CANCELLED ||
               d.contains('cancel') ||
               error.description.contains('取消')) {
-            c.mark('導覽被取消（忽略）');
+            // 取消後頁面沒有再載入的話會永遠空白轉圈，所以自動重載，最多 3 次
+            if (c.cancelRetries < 3 && c.targetUri != null) {
+              c.cancelRetries++;
+              c.mark('導覽被取消，自動重載第 ${c.cancelRetries} 次');
+              final uri = c.targetUri!;
+              Future.delayed(const Duration(milliseconds: 400), () {
+                ctrl.loadUrl(urlRequest: URLRequest(url: WebUri(uri.toString())));
+              });
+            } else {
+              c.onLoadError('網頁載入被取消，已重試 ${c.cancelRetries} 次仍失敗');
+            }
             return;
           }
           c.onLoadError('無法載入網頁：${error.description}');
