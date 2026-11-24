@@ -1379,11 +1379,13 @@ class _McpServerDialogState extends State<_McpServerDialog> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _nameCtrl;
   late final TextEditingController _urlCtrl;
+  late final TextEditingController _keyCtrl;
 
   @override
   void initState() {
     super.initState();
     final m   = widget.editing;
+    _keyCtrl  = TextEditingController(text: m?.apiKey ?? '');
     _nameCtrl = TextEditingController(text: m?.name ?? '');
     _urlCtrl  = TextEditingController(
         text: m?.url ?? 'http://192.168.1.:5000/mcp');
@@ -1393,6 +1395,7 @@ class _McpServerDialogState extends State<_McpServerDialog> {
   void dispose() {
     _nameCtrl.dispose();
     _urlCtrl.dispose();
+    _keyCtrl.dispose();
     super.dispose();
   }
 
@@ -1404,6 +1407,7 @@ class _McpServerDialogState extends State<_McpServerDialog> {
       name:    _nameCtrl.text.trim(),
       url:     _urlCtrl.text.trim(),
       enabled: base?.enabled ?? true,
+      apiKey:  _keyCtrl.text.trim(),
     );
     Navigator.pop(context, m);
   }
@@ -1443,6 +1447,18 @@ class _McpServerDialogState extends State<_McpServerDialog> {
               validator: (v) => McpServerModel.isValidUrl(v ?? '')
                   ? null
                   : '請輸入完整網址（含 http:// 或 https://）',
+            ),
+            const SizedBox(height: 16),
+            TextFormField(
+              controller: _keyCtrl,
+              autocorrect: false,
+              enableSuggestions: false,
+              decoration: const InputDecoration(
+                labelText: 'Proxy Key（選填）',
+                hintText: '經網站 /mcp-proxy 連線時填',
+                prefixIcon: Icon(Icons.key_rounded),
+                border: OutlineInputBorder(),
+              ),
             ),
           ]),
         ),

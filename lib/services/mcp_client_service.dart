@@ -269,8 +269,21 @@ class McpClientService {
             16, (_) => r.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
       });
 
+  /// MCP 網址去掉結尾的 /mcp 後的根網址。
+  /// 直連是 http://host:1987；經網站代理是 https://網站/mcp-proxy（保留前綴）
+  String _rootOf(McpServerModel m) {
+    final u    = Uri.parse(m.url.trim());
+    var   path = u.path.replaceAll(RegExp(r'/+$'), '');
+    if (path.endsWith('/mcp')) path = path.substring(0, path.length - 4);
+    return '${u.scheme}://${u.authority}$path';
+  }
+
+  Map<String, String> _keyHeader(McpServerModel m) =>
+      m.apiKey.isEmpty ? const {} : {'X-Mcp-Proxy-Key': m.apiKey};
+
   Options _optionsFor(McpServerModel m) => Options(
         headers: {
+          ..._keyHeader(m),
           'Content-Type': 'application/json',
           'Accept': 'application/json, text/event-stream',
           'Mcp-Session-Id': _sessionFor(m),
@@ -284,12 +297,12 @@ class McpClientService {
   Future<String> authAsync(String path, Map<String, String> body) async {
     if (_enabled.isEmpty) throw Exception('沒有啟用的 MCP Server');
     final m   = _enabled.first;
-    final u   = Uri.parse(m.url);
     final res = await _dio.post(
-      '${u.scheme}://${u.authority}$path',
+      '${_rootOf(m)}$path',
       data: jsonEncode(body),
       options: Options(
         headers: {
+          ..._keyHeader(m),
           'Content-Type': 'application/json',
           'Mcp-Session-Id': _sessionFor(m),
         },
@@ -312,13 +325,13 @@ class McpClientService {
   /// 失敗（沒有啟用的 Server、連不上、非 2xx）丟例外。
   Future<dynamic> httpJson(String method, String path, {Object? body}) async {
     if (_enabled.isEmpty) throw Exception('沒有啟用的 MCP Server');
-    final u = Uri.parse(_enabled.first.url);
     final res = await _dio.request(
-      '${u.scheme}://${u.authority}$path',
+      '${_rootOf(_enabled.first)}$path',
       data: body == null ? null : jsonEncode(body),
       options: Options(
         method: method,
         headers: {
+          ..._keyHeader(_enabled.first),
           if (body != null) 'Content-Type': 'application/json',
           'Mcp-Session-Id': _sessionFor(_enabled.first),
         },
