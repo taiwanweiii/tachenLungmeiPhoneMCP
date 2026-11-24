@@ -284,6 +284,15 @@ class _Web extends StatelessWidget {
       onLoadStop: (ctrl, url) => c.onPageLoaded(),
       onReceivedError: (ctrl, request, error) {
         if (request.isForMainFrame ?? false) {
+          // 「已取消」(iOS -999 / ERR_ABORTED)：導覽被新的導覽取代或頁面自己轉址，
+          // 不是真的載入失敗，後面通常還會正常載入完成，不要當成錯誤彈出。
+          final d = error.description.toLowerCase();
+          if (error.type == WebResourceErrorType.CANCELLED ||
+              d.contains('cancel') ||
+              error.description.contains('取消')) {
+            debugPrint('[web] 導覽被取消（忽略）：${error.description}');
+            return;
+          }
           c.onLoadError('無法載入網頁：${error.description}');
         }
       },
