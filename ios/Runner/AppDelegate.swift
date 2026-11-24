@@ -3,8 +3,8 @@ import Flutter
 import Speech
 import AVFoundation
 
-@UIApplicationMain
-@objc class AppDelegate: FlutterAppDelegate {
+@main
+@objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
 
   private var speechRecognizer: SFSpeechRecognizer?
   private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
@@ -16,11 +16,18 @@ import AVFoundation
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
+    return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
 
-    let controller = window?.rootViewController as! FlutterViewController
+  // 使用 SceneDelegate 時，啟動當下 window 還是 nil，
+  // 所以 channel 要等 Flutter engine 建好後在這裡註冊（不可再用 window?.rootViewController as!）
+  func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
+    GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+
+    guard let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "curtain_mcp_stt") else { return }
     let channel = FlutterMethodChannel(
       name: "curtain_mcp/stt",
-      binaryMessenger: controller.binaryMessenger
+      binaryMessenger: registrar.messenger()
     )
 
     channel.setMethodCallHandler { [weak self] call, result in
@@ -40,9 +47,6 @@ import AVFoundation
         result(FlutterMethodNotImplemented)
       }
     }
-
-    GeneratedPluginRegistrant.register(with: self)
-    return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
   // ── 開始錄音辨識 ──────────────────────────────────────
