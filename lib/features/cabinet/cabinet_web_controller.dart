@@ -672,14 +672,22 @@ class CabinetWebController extends ChangeNotifier {
   /// 回傳 true = 剛登入成功，需要重新載入頁面讓網頁抓到登入狀態
   Future<bool> _ensureWebLogin(CabinetTransport t) async {
     try {
-      if (await t.hasSession()) return false;
+      if (await t.hasSession()) {
+        mark('網頁已登入');
+        return false;
+      }
       final cred = _session.credentials;
+      mark(cred == null ? '網頁未登入，且 App 沒有記下工號密碼（MCP 沒登入成功？）' : '網頁未登入，用 MCP 的工號 ${cred.userId} 登入');
       if (cred == null) {
         // 沒有記下帳密：不處理，使用者可以直接在視窗裡的網頁登入畫面自己登入
         return false;
       }
       final r = await t.signIn(cred.userId, cred.password);
-      if (r['ok'] == true) return true;
+      if (r['ok'] == true) {
+        mark('網頁登入成功，重新載入');
+        return true;
+      }
+      mark('網頁登入失敗：${r['message']}');
       error = '網頁登入失敗：${r['message'] ?? '未知原因'}';
       notifyListeners();
       return false;
