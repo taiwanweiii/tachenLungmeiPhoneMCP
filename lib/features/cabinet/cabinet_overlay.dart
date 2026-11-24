@@ -345,11 +345,14 @@ class _Web extends StatelessWidget {
       },
       onReceivedServerTrustAuthRequest: (ctrl, challenge) async {
         final host = challenge.protectionSpace.host;
-        return ServerTrustAuthResponse(
-          action: _isPrivateHost(host)
-              ? ServerTrustAuthResponseAction.PROCEED
-              : ServerTrustAuthResponseAction.CANCEL,
-        );
+        // 內網位址（開發機自簽憑證）放行；其他網站回傳 null，交給系統做正常的憑證驗證。
+        // 注意：iOS 上每次連線都會進到這裡（憑證正常也會），不能直接回 CANCEL，
+        // 否則正式站會被取消（畫面上看到「已取消」）。
+        if (_isPrivateHost(host)) {
+          return ServerTrustAuthResponse(
+              action: ServerTrustAuthResponseAction.PROCEED);
+        }
+        return null;
       },
       // 網頁的 alert／confirm 不彈系統對話框（嵌入模式下網頁自己會攔，這裡是保險）
       onJsAlert: (ctrl, req) async => JsAlertResponse(
