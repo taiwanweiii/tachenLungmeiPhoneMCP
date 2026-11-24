@@ -1,0 +1,30 @@
+workflows:
+  ios-unsigned-ipa:
+    name: iOS unsigned IPA (for Sideloadly)
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+      groups:
+        - app_env   # 在 Codemagic 建立的變數群組，內含 DOTENV_BASE64
+    scripts:
+      - name: 產生 .env
+        script: |
+          if [ -n "$DOTENV_BASE64" ]; then
+            echo "$DOTENV_BASE64" | base64 --decode > .env
+          else
+            cp .env.example .env
+          fi
+      - name: flutter pub get
+        script: flutter pub get
+      - name: Build iOS (no codesign)
+        script: flutter build ios --release --no-codesign
+      - name: 打包成 .ipa
+        script: |
+          mkdir -p build/ipa/Payload
+          cp -R build/ios/iphoneos/Runner.app build/ipa/Payload/
+          cd build/ipa && zip -qr CurtainMCP.ipa Payload
+    artifacts:
+      - build/ipa/CurtainMCP.ipa
