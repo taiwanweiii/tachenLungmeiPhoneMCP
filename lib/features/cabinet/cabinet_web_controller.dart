@@ -835,7 +835,7 @@ class CabinetWebController extends ChangeNotifier {
 
   /// 等網頁初始化完成（含既有案件的櫃體載入）。逾時回 false。
   Future<bool> waitUntilReady(
-      {Duration timeout = const Duration(seconds: 90)}) async {
+      {Duration timeout = const Duration(seconds: 150)}) async {
     final deadline = DateTime.now().add(timeout);
     while (DateTime.now().isBefore(deadline)) {
       if (pageReady) return true;
