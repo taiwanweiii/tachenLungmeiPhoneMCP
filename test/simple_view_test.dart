@@ -41,7 +41,8 @@ void main() {
       await t.pump(const Duration(milliseconds: 500));
       expect(tester_exception(t), isNull);
       expect(find.text('從目錄挑選'), findsOneWidget);
-      if (picked) expect(find.text('送出'), findsOneWidget);
+      // 簡易模式不需要「送出」：每次說話都會自動附上已選的櫃子
+      expect(find.text('送出'), findsNothing);
     });
   }
 }

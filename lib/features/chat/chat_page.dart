@@ -218,13 +218,10 @@ class _ChatPageState extends State<ChatPage> {
       return _pickedNote();
     };
     _voice.onTranscribed = (text) {
-      setState(() {
-        _heardText = text;
-        // 語音送出的訊息也能長按編輯：先存下送出前的對話狀態
-        _messages.add(
-            ChatMessage(text: text, isUser: true, before: _chat.snapshot()));
-        _isLoading = true;
-      });
+      // 語音送出的訊息也能長按編輯（會記下送出前的對話狀態）；
+      // 簡易模式長按某句選「語音重說」後，這次說的話會從那句開新分支
+      setState(() => _heardText = text);
+      _addUserMessage(ChatMessage(text: text, isUser: true));
       _scrollToBottom();
     };
     _voice.onResponse = (text) {
@@ -817,31 +814,12 @@ class _ChatPageState extends State<ChatPage> {
   /// 「發送到聊天」時放不進去（AI 正在回覆）而暫存的、只給模型看的配置備註；下一次送出時帶上
   String? _pendingAiNote;
 
-  Future<void> _send(String text, {String? aiNote}) async {
-    if (_isLoading) return;
-    // 只給模型看的備註：這次沒指定就用暫存的（只帶一次）
-    aiNote ??= _pendingAiNote;
-    _pendingAiNote = null;
-    await _waitForPickedDefaults();
-    if (!mounted) return;
-    // 清單有新變動時會直接附在訊息裡（畫面上看得到）；沒變動時改用「只給模型看的備註」附上，
-    // 這樣每一輪 AI 都知道目前選了哪些櫃子，不會因為清單沒進到它的記憶就一直反問
-    final listInMessage = _pickedUnsent;
-    final trimmed = _compose(text);
-    if (trimmed.isEmpty) return;
-    if (_picked.isNotEmpty && !listInMessage) {
-      final cur = _pickedNote();
-      aiNote = (aiNote == null || aiNote.isEmpty) ? cur : '$aiNote\n$cur';
-    }
-    _ctrl.clear();
-    // 已選的櫃子送出後不清掉（要等訂單真的建立成功，或使用者自己刪除），只記下這份已送出
-    _sentPickedSig = pickedSignature(_picked);
-
-    final newMsg = ChatMessage(text: trimmed, isUser: true);
+  /// 加入使用者送出的訊息並進入等待。正在編輯舊訊息（[_editing]）時開新分支：
+  /// 舊的後續對話整段存起來，AI 的歷史退回那則送出前。打字送出和簡易模式語音都走這裡。
+  void _addUserMessage(ChatMessage newMsg) {
     final editing = _editing;
     final idx = editing == null ? -1 : _messages.indexOf(editing);
     if (editing != null && idx >= 0) {
-      // 編輯舊訊息 → 開新分支：舊的後續對話整段存起來，AI 的歷史退回這則送出前
       var group = editing.branch;
       if (group == null) {
         group = BranchGroup(editing.before!)..versions.add(BranchVersion([]));
@@ -865,6 +843,29 @@ class _ChatPageState extends State<ChatPage> {
       _messages.add(newMsg);
       _isLoading = true;
     });
+  }
+
+  Future<void> _send(String text, {String? aiNote}) async {
+    if (_isLoading) return;
+    // 只給模型看的備註：這次沒指定就用暫存的（只帶一次）
+    aiNote ??= _pendingAiNote;
+    _pendingAiNote = null;
+    await _waitForPickedDefaults();
+    if (!mounted) return;
+    // 清單有新變動時會直接附在訊息裡（畫面上看得到）；沒變動時改用「只給模型看的備註」附上，
+    // 這樣每一輪 AI 都知道目前選了哪些櫃子，不會因為清單沒進到它的記憶就一直反問
+    final listInMessage = _pickedUnsent;
+    final trimmed = _compose(text);
+    if (trimmed.isEmpty) return;
+    if (_picked.isNotEmpty && !listInMessage) {
+      final cur = _pickedNote();
+      aiNote = (aiNote == null || aiNote.isEmpty) ? cur : '$aiNote\n$cur';
+    }
+    _ctrl.clear();
+    // 已選的櫃子送出後不清掉（要等訂單真的建立成功，或使用者自己刪除），只記下這份已送出
+    _sentPickedSig = pickedSignature(_picked);
+
+    _addUserMessage(ChatMessage(text: trimmed, isUser: true));
     _scrollToBottom();
 
     try {
@@ -928,16 +929,20 @@ class _ChatPageState extends State<ChatPage> {
           ListTile(
             leading: const Icon(Icons.edit_rounded),
             title: const Text('修改文字'),
-            subtitle: const Text('原文帶進輸入框，用打字修改'),
+            subtitle: Text(_simpleMode
+                ? '切到聊天模式，原文帶進輸入框修改'
+                : '原文帶進輸入框，用打字修改'),
             onTap: () => Navigator.pop(ctx, false),
           ),
           ListTile(
             enabled: _voiceAvailable,
             leading: const Icon(Icons.mic_rounded),
             title: const Text('語音重說'),
-            subtitle: Text(_voiceAvailable
-                ? '清空輸入框，長按麥克風重新說一次'
-                : '語音功能不可用'),
+            subtitle: Text(!_voiceAvailable
+                ? '語音功能不可用'
+                : _simpleMode
+                    ? '點「你」重新說這一句，之後的對話會重來'
+                    : '清空輸入框，長按麥克風重新說一次'),
             onTap: _voiceAvailable ? () => Navigator.pop(ctx, true) : null,
           ),
           const SizedBox(height: 8),
@@ -945,6 +950,8 @@ class _ChatPageState extends State<ChatPage> {
       ),
     );
     if (voice == null || !mounted) return;
+    // 簡易模式沒有輸入框：修改文字就切到聊天模式帶入原文；語音重說留在簡易模式，點「你」重說
+    if (_simpleMode && !voice) _toggleSimpleMode();
     await _startEdit(msg, voice: voice);
   }
 
@@ -1314,6 +1321,10 @@ class _ChatPageState extends State<ChatPage> {
               pickedSent: _picked.isNotEmpty && !_pickedUnsent,
               onPick: () => _openPicker(),
               onSendPicked: () => _send(''),
+            onEditMessage: (m) => unawaited(_chooseEditMode(m)),
+            editingText:
+                (_editing != null && _editByVoice) ? _editing!.text : null,
+            onCancelEdit: _cancelEdit,
               onRemovePicked: (p) {
                 setState(() => _picked.remove(p));
                 _syncPickedToConfig();
@@ -3309,8 +3320,14 @@ class _SimpleVoiceView extends StatefulWidget {
   final VoidCallback onPick, onSendPicked;
   final void Function(PickedItem) onRemovePicked;
   final void Function(PickedItem, int) onPickedQty;
+  final void Function(ChatMessage)? onEditMessage; // 長按自己說過的話 → 修改文字／語音重說
+  final String? editingText; // 正在語音重說的那一句（null = 沒有在重說）
+  final VoidCallback? onCancelEdit;
 
   const _SimpleVoiceView({
+    this.onEditMessage,
+    this.editingText,
+    this.onCancelEdit,
     required this.voiceAvailable,
     required this.isRecording,
     required this.isLoading,
@@ -3374,12 +3391,37 @@ class _SimpleVoiceViewState extends State<_SimpleVoiceView>
               ? _SimpleState.speaking
               : _SimpleState.idle;
 
-  /// 選好的櫃子 + 「從目錄挑選」「送出」，跟聊天模式輸入列上的是同一份
+  /// 選好的櫃子 + 「從目錄挑選」，跟聊天模式輸入列上的是同一份。
+  /// 簡易模式不需要「送出」：每次說話都會自動把目前已選的櫃子與規格一起交給 AI。
   Widget _pickedBar(BuildContext context) {
     final busy = widget.isLoading || widget.isRecording;
+    final cs = Theme.of(context).colorScheme;
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
+        if (widget.editingText != null)
+          Container(
+            margin: const EdgeInsets.only(bottom: 6),
+            padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
+            decoration: BoxDecoration(
+              color: cs.secondaryContainer,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(children: [
+              Icon(Icons.mic_rounded, size: 18, color: cs.onSecondaryContainer),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text('重說：「${widget.editingText}」，點「你」開始說',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: cs.onSecondaryContainer)),
+              ),
+              TextButton(
+                onPressed: busy ? null : widget.onCancelEdit,
+                child: const Text('取消'),
+              ),
+            ]),
+          ),
         if (widget.picked.isNotEmpty)
           _PickedPanel(
             picked: widget.picked,
@@ -3391,7 +3433,6 @@ class _SimpleVoiceViewState extends State<_SimpleVoiceView>
             onEdit: widget.onEditPicked,
             price: widget.pickedPrice,
             busy: widget.pickedBusy,
-            sent: widget.pickedSent,
           ),
         Row(children: [
           TextButton.icon(
@@ -3404,13 +3445,6 @@ class _SimpleVoiceViewState extends State<_SimpleVoiceView>
             label: const Text('從目錄挑選'),
           ),
           const Spacer(),
-          if (widget.picked.isNotEmpty && !widget.pickedSent)
-            FilledButton(
-              // App 主題把 FilledButton 的最小寬度設成無限大，放在 Row 裡要覆蓋掉
-              style: FilledButton.styleFrom(minimumSize: const Size(88, 44)),
-              onPressed: busy ? null : widget.onSendPicked,
-              child: const Text('送出'),
-            ),
         ]),
       ]),
     );
@@ -3874,7 +3908,12 @@ class _SimpleVoiceViewState extends State<_SimpleVoiceView>
     // 對話紀錄 + 正在進行的這一輪（邊說邊出字、思考中、唸到哪顯示到哪）
     final items = <_TItem>[
       for (final m in widget.messages)
-        _TItem(text: m.text, isUser: m.isUser, isError: m.isError, time: m.time),
+        _TItem(
+            text: m.text,
+            isUser: m.isUser,
+            isError: m.isError,
+            time: m.time,
+            msg: m),
     ];
     final heard = widget.heardText.trim();
     if (state == _SimpleState.listening) {
@@ -3918,7 +3957,10 @@ class _SimpleVoiceViewState extends State<_SimpleVoiceView>
         Divider(height: 1, color: cs.outlineVariant),
         Expanded(
           child: _TranscriptList(
-              items: items, fontSize: compact ? 15 : 17, compact: compact),
+              items: items,
+              fontSize: compact ? 15 : 17,
+              compact: compact,
+              onLongPressUser: widget.onEditMessage),
         ),
       ]),
     );
@@ -4106,6 +4148,7 @@ class _TItem {
   final bool live; // 正在說／正在唸：純文字 + 游標
   final bool dots; // AI 思考中
   final DateTime? time;
+  final ChatMessage? msg; // 對應的訊息（正在進行中的這一輪沒有）
   const _TItem({
     required this.text,
     required this.isUser,
@@ -4113,6 +4156,7 @@ class _TItem {
     this.live = false,
     this.dots = false,
     this.time,
+    this.msg,
   });
 }
 
@@ -4121,10 +4165,12 @@ class _TranscriptList extends StatelessWidget {
   final List<_TItem> items;
   final double fontSize;
   final bool compact;
+  final void Function(ChatMessage)? onLongPressUser; // 長按自己說過的話
   const _TranscriptList({
     required this.items,
     required this.fontSize,
     required this.compact,
+    this.onLongPressUser,
   });
 
   @override
@@ -4185,36 +4231,42 @@ class _TranscriptList extends StatelessWidget {
         alignment: m.isUser ? Alignment.centerRight : Alignment.centerLeft,
         child: Align(
           alignment: m.isUser ? Alignment.centerRight : Alignment.centerLeft,
-          child: Container(
-            margin: EdgeInsets.symmetric(vertical: compact ? 4 : 6),
-            padding: EdgeInsets.fromLTRB(
-                compact ? 13 : 16, compact ? 8 : 10, compact ? 13 : 16, 6),
-            decoration: BoxDecoration(
-              color: m.isUser
-                  ? cs.primary
-                  : m.isError
-                      ? cs.errorContainer
-                      : cs.surfaceContainerHighest,
-              borderRadius: BorderRadius.only(
-                topLeft: const Radius.circular(18),
-                topRight: const Radius.circular(18),
-                bottomLeft: Radius.circular(m.isUser ? 18 : 6),
-                bottomRight: Radius.circular(m.isUser ? 6 : 18),
+          child: GestureDetector(
+            onLongPress: (m.isUser && m.msg != null && onLongPressUser != null)
+                ? () => onLongPressUser!(m.msg!)
+                : null,
+            child: Container(
+              margin: EdgeInsets.symmetric(vertical: compact ? 4 : 6),
+              padding: EdgeInsets.fromLTRB(
+                  compact ? 13 : 16, compact ? 8 : 10, compact ? 13 : 16, 6),
+              decoration: BoxDecoration(
+                color: m.isUser
+                    ? cs.primary
+                    : m.isError
+                        ? cs.errorContainer
+                        : cs.surfaceContainerHighest,
+                borderRadius: BorderRadius.only(
+                  topLeft: const Radius.circular(18),
+                  topRight: const Radius.circular(18),
+                  bottomLeft: Radius.circular(m.isUser ? 18 : 6),
+                  bottomRight: Radius.circular(m.isUser ? 6 : 18),
+                ),
               ),
-            ),
-            child: Column(
-              crossAxisAlignment:
-                  m.isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                content,
-                if (time != null) ...[
-                  const SizedBox(height: 2),
-                  Text(time,
-                      style: TextStyle(
-                          fontSize: 10, color: fg.withValues(alpha: 0.6))),
+              child: Column(
+                crossAxisAlignment: m.isUser
+                    ? CrossAxisAlignment.end
+                    : CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  content,
+                  if (time != null) ...[
+                    const SizedBox(height: 2),
+                    Text(time,
+                        style: TextStyle(
+                            fontSize: 10, color: fg.withValues(alpha: 0.6))),
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
         ),
