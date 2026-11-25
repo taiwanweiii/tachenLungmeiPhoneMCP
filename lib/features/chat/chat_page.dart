@@ -202,14 +202,14 @@ class _ChatPageState extends State<ChatPage> {
         _fillDictation(text);
       }
     };
-    // 挑選／修改訂單的視窗開著時，講的話交給網頁操作畫面（選規格、下一步、加入…），
-    // 不送給 AI
+    // 挑選／修改訂單的視窗開著時，講的話先交給網頁操作畫面（選規格、下一步、加入…）；
+    // 網頁聽不懂的（放左牆、調順序、改客戶…）再交給 AI，對話能做的簡易語音也要能做
     _voice.interceptTranscript = (text) async {
       final c = GetIt.instance<CabinetWebController>();
       if (!c.acceptsVoice) return false;
       if (mounted) setState(() => _heardText = text);
-      await c.voiceCommand(text);
-      return true;
+      final r = await c.voiceCommand(text);
+      return r['handled'] == true;
     };
     _voice.onTranscribed = (text) {
       setState(() {
@@ -1388,8 +1388,9 @@ class _ChatPageState extends State<ChatPage> {
                   if (text != null) {
                     final c = GetIt.instance<CabinetWebController>();
                     if (c.acceptsVoice) {
-                      // 視窗開著：交給網頁操作畫面
-                      await c.voiceCommand(text);
+                      // 視窗開著：先交給網頁操作畫面，網頁聽不懂就放進輸入框，確認後送給 AI
+                      final r = await c.voiceCommand(text);
+                      if (r['handled'] != true) _fillDictation(text);
                     } else {
                       _fillDictation(text);
                     }
