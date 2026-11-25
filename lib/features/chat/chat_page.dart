@@ -810,8 +810,16 @@ class _ChatPageState extends State<ChatPage> {
     _pendingAiNote = null;
     await _waitForPickedDefaults();
     if (!mounted) return;
+    // 清單有新變動時會直接附在訊息裡（畫面上看得到）；沒變動時改用「只給模型看的備註」附上，
+    // 這樣每一輪 AI 都知道目前選了哪些櫃子，不會因為清單沒進到它的記憶就一直反問
+    final listInMessage = _pickedUnsent;
     final trimmed = _compose(text);
     if (trimmed.isEmpty) return;
+    if (_picked.isNotEmpty && !listInMessage) {
+      final cur = '目前已選的櫃子（畫面上已經選好，不用再問品號與規格）：\n'
+          '${_picked.map((p) => '- ${p.forAi}').join('\n')}';
+      aiNote = (aiNote == null || aiNote.isEmpty) ? cur : '$aiNote\n$cur';
+    }
     _ctrl.clear();
     // 已選的櫃子送出後不清掉（要等訂單真的建立成功，或使用者自己刪除），只記下這份已送出
     _sentPickedSig = pickedSignature(_picked);
