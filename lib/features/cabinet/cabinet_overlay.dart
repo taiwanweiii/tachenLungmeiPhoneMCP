@@ -116,7 +116,9 @@ class _Panel extends StatelessWidget {
                           child: Center(child: CircularProgressIndicator()),
                         ),
                       ),
+                    // 順利載入就不顯示時間軸；載入超過 60 秒或出錯才顯示，方便看卡在哪一步
                     if ((c.loading || !c.pageReady) &&
+                        (c.error != null || c.traceElapsedSec >= 60) &&
                         mode != CabinetPanelMode.mini &&
                         c.trace.isNotEmpty)
                       Positioned(

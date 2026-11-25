@@ -134,6 +134,8 @@ class CabinetWebController extends ChangeNotifier {
   /// 這次開啟已經因「導覽被取消」自動重載過幾次（每次 _open 歸零）
   int cancelRetries = 0;
   final Stopwatch _traceClock = Stopwatch();
+  /// 載入時間軸已經跑了幾秒（畫面只有載入太久或出錯才顯示時間軸）
+  int get traceElapsedSec => _traceClock.elapsed.inSeconds;
 
   /// 記一筆載入事件；[reset] 時從頭開始計時
   void mark(String event, {bool reset = false}) {
