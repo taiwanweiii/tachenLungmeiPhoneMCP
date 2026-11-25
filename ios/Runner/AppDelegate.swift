@@ -19,8 +19,11 @@ import AVFoundation
   private var lastChange = Date()
   private var startedAt = Date()
   private var silenceTimer: Timer?
-  private let silenceAfterSpeech: TimeInterval = 1.5
-  private let silenceBeforeSpeech: TimeInterval = 8.0
+  // 這兩個時間由 Dart 每次開始聽時帶進來（使用者在語音設定裡調整）
+  private var silenceAfterSpeech: TimeInterval = 1.5
+  private var silenceBeforeSpeech: TimeInterval = 8.0
+  // false：不會因為安靜自動結束（AI 講話時邊聽邊找插話關鍵字），由 armAutoStop／cancelListening 結束
+  private var autoStop = true
 
   override func application(
     _ application: UIApplication,
@@ -50,10 +53,30 @@ import AVFoundation
         self.requestPermissions { granted in result(granted) }
 
       case "startListening":
+        let args = call.arguments as? [String: Any] ?? [:]
+        self.silenceAfterSpeech = (args["endSilence"] as? NSNumber)?.doubleValue ?? 1.5
+        self.silenceBeforeSpeech = (args["idleTimeout"] as? NSNumber)?.doubleValue ?? 8.0
+        self.autoStop = (args["autoStop"] as? Bool) ?? true
         self.startListening(result: result)
 
       case "stopListening":
         self.stopListening()
+        result(nil)
+
+      case "cancelListening":
+        // 馬上停、丟掉聽到的內容（AI 講完了，邊聽邊找關鍵字的這次不要了）
+        self.lastText = ""
+        self.finish(error: nil)
+        result(nil)
+
+      case "armAutoStop":
+        // 聽到插話關鍵字：接著聽使用者講完，停頓就收音
+        let args = call.arguments as? [String: Any] ?? [:]
+        self.silenceAfterSpeech = (args["endSilence"] as? NSNumber)?.doubleValue ?? self.silenceAfterSpeech
+        self.autoStop = true
+        self.lastChange = Date()
+        self.startedAt = Date()
+        self.startSilenceTimer()
         result(nil)
 
       default:
@@ -136,11 +159,15 @@ import AVFoundation
     // 錄音和朗讀共用同一個 Session：用 playAndRecord + 預設走喇叭，
     // 不然錄過音之後 TTS 會變成沒聲音（舊版設成 .record 就不會有輸出）
     let audioSession = AVAudioSession.sharedInstance()
-    try audioSession.setCategory(
-      .playAndRecord,
-      mode: .default,
-      options: [.defaultToSpeaker, .allowBluetooth]
-    )
+    // AI 正在講話時開始聽（找插話關鍵字）：TTS 已經把 Session 設成 playAndRecord，
+    // 這時再設一次可能讓正在唸的聲音頓一下，所以已經是 playAndRecord 就不重設
+    if autoStop || audioSession.category != .playAndRecord {
+      try audioSession.setCategory(
+        .playAndRecord,
+        mode: .default,
+        options: [.defaultToSpeaker, .allowBluetooth]
+      )
+    }
     try audioSession.setActive(true)
 
     speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "zh-TW"))
@@ -189,7 +216,13 @@ import AVFoundation
     audioEngine.prepare()
     try audioEngine.start()
 
-    // 自動結束：說完停頓 1.5 秒就收音；一直沒開口 8 秒也收音
+    silenceTimer?.invalidate()
+    silenceTimer = nil
+    if autoStop { startSilenceTimer() }
+  }
+
+  /// 自動結束：說完停頓 silenceAfterSpeech 秒就收音；一直沒開口 silenceBeforeSpeech 秒也收音
+  private func startSilenceTimer() {
     silenceTimer?.invalidate()
     silenceTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
       guard let self = self else { return }

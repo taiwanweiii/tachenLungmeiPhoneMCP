@@ -26,6 +26,8 @@ import '../../core/config/app_config.dart';
 import '../../voice/voice_orchestrator.dart';
 import '../../voice/mobile_voice_output.dart';
 import '../../voice/voice_mode.dart';
+import '../../voice/voice_settings.dart';
+import 'conversation_settings_sheet.dart';
 
 // ── 訊息資料模型 ──────────────────────────────────────────
 class ChatMessage {
@@ -249,6 +251,22 @@ class _ChatPageState extends State<ChatPage> {
       setState(() => _isLoading = false);
       _showSnack(err, isError: true);
     };
+    // 連續對話：一直沒開口就暫停
+    _voice.onPaused = () {
+      if (!mounted) return;
+      setState(() => _heardText = '');
+      _showSnack('${_voice.settings.idleSeconds} 秒沒講話，已暫停；點「你」繼續');
+    };
+    // AI 講話中聽到插話關鍵字：AI 已經停下來，改聽你說
+    _voice.onBargeIn = () {
+      if (!mounted) return;
+      HapticFeedback.mediumImpact();
+      setState(() => _heardText = '');
+    };
+    unawaited(VoiceConversationSettings.load().then((s) {
+      _voice.settings = s;
+      if (mounted) setState(() {});
+    }));
 
     _voice.setMode(VoiceMode.pushToTalk);
     _initVoice();
@@ -332,6 +350,8 @@ class _ChatPageState extends State<ChatPage> {
     if (simple == _simpleMode) return;
     // 用滑的切到簡易模式也一樣收起鍵盤
     if (simple) FocusManager.instance.primaryFocus?.unfocus();
+    // 離開簡易模式：連續對話也一起結束
+    if (_voice.inLoop) unawaited(_voice.stopLoop());
     if (_isRecording) _voice.stopTurn();
     if (_isSpeaking) _voice.stopSpeaking();
     setState(() => _simpleMode = simple);
@@ -359,6 +379,24 @@ class _ChatPageState extends State<ChatPage> {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool(_kTtsEnabled, on);
     } catch (_) {}
+  }
+
+  /// 連續對話、停頓秒數、插話關鍵字（長按「你」或右上角選單）
+  Future<void> _openConversationSettings() async {
+    HapticFeedback.selectionClick();
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => ConversationSettingsSheet(
+        initial: _voice.settings,
+        onChanged: (s) {
+          _voice.settings = s;
+          unawaited(s.save());
+          if (mounted) setState(() {});
+        },
+      ),
+    );
   }
 
   /// 右上角喇叭：語音設定小視窗（開關、語速、音調、聲音）
@@ -404,7 +442,13 @@ class _ChatPageState extends State<ChatPage> {
     }
     if (_isRecording) {
       HapticFeedback.lightImpact();
-      await _voice.stopTurn();
+      // 連續對話中還沒開口就按：結束連續對話；已經在講：馬上送出這句
+      if (_voice.settings.continuous && _heardText.trim().isEmpty) {
+        await _voice.stopLoop();
+        _showSnack('已結束連續對話；點「你」重新開始');
+      } else {
+        await _voice.stopTurn();
+      }
       return;
     }
     HapticFeedback.mediumImpact();
@@ -1253,6 +1297,8 @@ class _ChatPageState extends State<ChatPage> {
               switch (v) {
                 case 'voice':
                   _openVoiceSettings();
+                case 'conversation':
+                  unawaited(_openConversationSettings());
                 case 'cabinet':
                   // 已選的櫃子一起帶進配置頁，之後兩邊保持同步
                   _openCabinetConfig();
@@ -1289,6 +1335,16 @@ class _ChatPageState extends State<ChatPage> {
                       size: 20),
                   const SizedBox(width: 12),
                   Text(_ttsEnabled ? '語音設定（回覆會唸出）' : '語音設定（回覆不唸）'),
+                ]),
+              ),
+              PopupMenuItem<String>(
+                value: 'conversation',
+                child: Row(children: [
+                  const Icon(Icons.record_voice_over_rounded, size: 20),
+                  const SizedBox(width: 12),
+                  Text(_voice.settings.continuous
+                      ? '連續對話與插話（開）'
+                      : '連續對話與插話（關）'),
                 ]),
               ),
               const PopupMenuItem<String>(
@@ -1371,6 +1427,8 @@ class _ChatPageState extends State<ChatPage> {
               skillName: skill.name,
               endpointName: epName,
               onMicTap: _onSimpleMicTap,
+              onMicLongPress: () => unawaited(_openConversationSettings()),
+              continuous: _voice.settings.continuous,
               onBackToChat: _toggleSimpleMode,
               onPickSkill: _showSkillPicker,
               onOpenSettings: () => Navigator.pushNamed(context, '/settings'),
@@ -3379,6 +3437,8 @@ class _SimpleVoiceView extends StatefulWidget {
   final List<ChatMessage> messages;
   final String skillIcon, skillName, endpointName;
   final VoidCallback onMicTap, onBackToChat, onPickSkill, onOpenSettings;
+  final VoidCallback? onMicLongPress; // 長按「你」：連續對話與插話設定
+  final bool continuous; // 連續對話開著（「你」的標籤會標示）
   final String? progressText; // 思考／查詢時 AI 格的字幕
   final bool pendingOrder; // 有新訂單等確認 → 顯示確認列
   final VoidCallback onConfirmOrder, onEditOrder;
@@ -3399,6 +3459,8 @@ class _SimpleVoiceView extends StatefulWidget {
   final VoidCallback? onCancelEdit;
 
   const _SimpleVoiceView({
+    this.onMicLongPress,
+    this.continuous = false,
     this.onEditMessage,
     this.editingText,
     this.onCancelEdit,
@@ -3651,6 +3713,7 @@ class _SimpleVoiceViewState extends State<_SimpleVoiceView>
     required Color chipFg,
     required String semantics,
     required VoidCallback? onTap,
+    VoidCallback? onLongPress,
     required Widget Function(double size) visual,
     required Widget caption,
   }) {
@@ -3688,6 +3751,7 @@ class _SimpleVoiceViewState extends State<_SimpleVoiceView>
             child: InkWell(
               borderRadius: radius,
               onTap: onTap,
+              onLongPress: onLongPress,
               child: Stack(children: [
                 Positioned(
                   top: compact ? 10 : 14,
@@ -3805,8 +3869,8 @@ class _SimpleVoiceViewState extends State<_SimpleVoiceView>
     final caption = heard.isNotEmpty
         ? heard
         : listening
-            ? '請說話…'
-            : '點這裡開始說話';
+            ? (widget.continuous ? '請說話…（沒開口時點一下結束連續對話）' : '請說話…')
+            : (widget.continuous ? '點這裡開始連續對話，長按可設定' : '點這裡開始說話，長按可設定');
 
     return _tile(
       context: context,
@@ -3814,12 +3878,13 @@ class _SimpleVoiceViewState extends State<_SimpleVoiceView>
       active: listening,
       dimmed: state == _SimpleState.thinking || state == _SimpleState.speaking,
       activeColor: cs.error,
-      label: '你',
+      label: widget.continuous ? '你・連續對話' : '你',
       chip: listening ? '聆聽中' : '點我說話',
       chipBg: listening ? cs.errorContainer : cs.surfaceContainerHighest,
       chipFg: listening ? cs.onErrorContainer : cs.onSurfaceVariant,
-      semantics: '你，點這裡開始或結束說話',
+      semantics: '你，點這裡開始或結束說話，長按打開連續對話設定',
       onTap: state == _SimpleState.thinking ? null : widget.onMicTap,
+      onLongPress: widget.onMicLongPress,
       visual: (size) => _userMic(context, state, size),
       caption: _caption(caption, heard.isEmpty ? cs.outline : cs.onSurface),
     );

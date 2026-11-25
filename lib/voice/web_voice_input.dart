@@ -64,8 +64,9 @@ class WebVoiceInput implements VoiceInput {
     _ready = true;
   }
 
+  /// 瀏覽器的語音辨識自己決定什麼時候算講完，停頓秒數等設定在 Web 版不適用
   @override
-  Future<void> startRecording() async {
+  Future<void> startRecording({ListenOptions options = const ListenOptions()}) async {
     if (!_ready) return;
     _rec?.abort();
     _lastError = null;
@@ -113,6 +114,15 @@ class WebVoiceInput implements VoiceInput {
   Future<void> stopListening() async {
     _rec?.stop(); // 停止收音，結果會在 onend 回傳
   }
+
+  @override
+  Future<void> cancel() async {
+    _text.clear(); // onend 會回 null
+    _rec?.abort();
+  }
+
+  @override
+  Future<void> armAutoStop(double endSilenceSeconds) async {}
 
   @override
   Future<String?> awaitResult() async {

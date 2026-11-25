@@ -72,13 +72,13 @@ class MobileVoiceInput implements VoiceInput {
 
   /// 開始錄音，保存 Future 等待辨識結果
   @override
-  Future<void> startRecording() async {
+  Future<void> startRecording({ListenOptions options = const ListenOptions()}) async {
     if (!_ready) return;
 
     // ✅ 修復重點：用變數保存 Future，不能丟棄
     _lastError = null;
     _listeningFuture = _channel
-        .invokeMethod<String>('startListening')
+        .invokeMethod<String>('startListening', options.toMap())
         .then((v) => v)
         .catchError((e) {
       if (e is PlatformException) {
@@ -115,6 +115,24 @@ class MobileVoiceInput implements VoiceInput {
   Future<void> stopListening() async {
     try {
       await _channel.invokeMethod<void>('stopListening');
+    } catch (_) {}
+  }
+
+  @override
+  Future<void> cancel() async {
+    try {
+      await _channel.invokeMethod<void>('cancelListening');
+    } catch (_) {
+      // 舊版原生端沒有 cancelListening：退回一般停止
+      await stopListening();
+    }
+  }
+
+  @override
+  Future<void> armAutoStop(double endSilenceSeconds) async {
+    try {
+      await _channel.invokeMethod<void>(
+          'armAutoStop', {'endSilence': endSilenceSeconds});
     } catch (_) {}
   }
 

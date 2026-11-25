@@ -17,6 +17,13 @@ class MainActivity : FlutterActivity() {
     private var isListening = false
     private var channel: MethodChannel? = null
 
+    private var endSilenceMs = 1500L
+    private var idleMs = 8000L
+    private var autoStop = true
+    private var gotSpeech = false
+    // 一直沒開口 idleMs 就結束（Android 本身沒有這個設定）
+    private val idleHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
@@ -26,8 +33,25 @@ class MainActivity : FlutterActivity() {
         )
         channel!!.setMethodCallHandler { call, result ->
             when (call.method) {
-                "startListening" -> startListening(result)
+                "startListening" -> {
+                    // 時間由 Dart 帶進來（使用者在語音設定裡調整）
+                    endSilenceMs = (((call.argument<Number>("endSilence"))?.toDouble() ?: 1.5) * 1000).toLong()
+                    idleMs = (((call.argument<Number>("idleTimeout"))?.toDouble() ?: 8.0) * 1000).toLong()
+                    autoStop = call.argument<Boolean>("autoStop") ?: true
+                    startListening(result)
+                }
                 "stopListening"  -> stopListening(result)
+                // 馬上停、丟掉聽到的內容
+                "cancelListening" -> {
+                    idleHandler.removeCallbacksAndMessages(null)
+                    speechRecognizer?.cancel()
+                    isListening = false
+                    pendingResult?.success("")
+                    pendingResult = null
+                    result.success(null)
+                }
+                // Android 的辨識器停頓後會自己結束，聽到插話關鍵字後不用另外設定
+                "armAutoStop" -> result.success(null)
                 "isAvailable"    -> result.success(
                     SpeechRecognizer.isRecognitionAvailable(this)
                 )
@@ -42,17 +66,31 @@ class MainActivity : FlutterActivity() {
             return
         }
 
-        // 若上一個還在跑，先清掉
+        // 若上一個還在跑，先清掉（上一個還沒回覆的話先回空字串，不要讓 Dart 永遠等）
+        idleHandler.removeCallbacksAndMessages(null)
         speechRecognizer?.destroy()
         speechRecognizer = null
+        pendingResult?.success("")
         pendingResult = result
         isListening = true
+        gotSpeech = false
+        if (autoStop) {
+            idleHandler.postDelayed({
+                if (!gotSpeech && pendingResult != null) {
+                    speechRecognizer?.cancel()
+                    isListening = false
+                    pendingResult?.success("")
+                    pendingResult = null
+                }
+            }, idleMs)
+        }
 
         speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
         speechRecognizer?.setRecognitionListener(object : RecognitionListener {
 
             override fun onResults(bundle: Bundle?) {
                 isListening = false
+                idleHandler.removeCallbacksAndMessages(null)
                 val matches = bundle
                     ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 val text = matches?.firstOrNull() ?: ""
@@ -62,6 +100,7 @@ class MainActivity : FlutterActivity() {
 
             override fun onError(errorCode: Int) {
                 isListening = false
+                idleHandler.removeCallbacksAndMessages(null)
                 val msg = sttErrorMessage(errorCode)
                 pendingResult?.error("STT_ERROR", msg, errorCode)
                 pendingResult = null
@@ -74,7 +113,7 @@ class MainActivity : FlutterActivity() {
             }
 
             override fun onReadyForSpeech(p0: Bundle?) {}
-            override fun onBeginningOfSpeech() {}
+            override fun onBeginningOfSpeech() { gotSpeech = true }
             // 音量（約 -2 ~ 10 dB）換算成 0 ~ 1，給水波紋動畫用
             override fun onRmsChanged(rmsdB: Float) {
                 val level = ((rmsdB + 2f) / 12f).coerceIn(0f, 1f)
@@ -86,7 +125,10 @@ class MainActivity : FlutterActivity() {
                 val text = bundle
                     ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                     ?.firstOrNull()
-                if (!text.isNullOrBlank()) channel?.invokeMethod("onPartial", text)
+                if (!text.isNullOrBlank()) {
+                    gotSpeech = true
+                    channel?.invokeMethod("onPartial", text)
+                }
             }
             override fun onEvent(p0: Int, p1: Bundle?) {}
         })
@@ -102,11 +144,11 @@ class MainActivity : FlutterActivity() {
             // ✅ 讓系統等待足夠時間，避免太快截斷
             putExtra(
                 RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
-                1500L
+                endSilenceMs
             )
             putExtra(
                 RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS,
-                1500L
+                endSilenceMs
             )
             putExtra(
                 RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS,
