@@ -1,18 +1,23 @@
 import 'package:flutter/material.dart';
 
 import '../../voice/voice_settings.dart';
+import 'simple_style.dart';
 
-/// 長按「你」（或右上角選單）打開：連續對話、停頓秒數、插話關鍵字。
-/// 每次改動就呼叫 [onChanged]（呼叫端負責存檔、套用）。
+/// 長按麥克風（或右上角選單）打開：畫面風格、連續對話、停頓秒數、插話關鍵字。
+/// 每次改動就呼叫 [onChanged]／[onStyleChanged]（呼叫端負責存檔、套用）。
 class ConversationSettingsSheet extends StatefulWidget {
   const ConversationSettingsSheet({
     super.key,
     required this.initial,
     required this.onChanged,
+    this.initialStyle = SimpleStyle.classic,
+    this.onStyleChanged,
   });
 
   final VoiceConversationSettings initial;
   final void Function(VoiceConversationSettings) onChanged;
+  final SimpleStyle initialStyle;
+  final void Function(SimpleStyle)? onStyleChanged;
 
   @override
   State<ConversationSettingsSheet> createState() => _ConversationSettingsSheetState();
@@ -23,6 +28,7 @@ class _ConversationSettingsSheetState extends State<ConversationSettingsSheet> {
   late double _idle = widget.initial.idleSeconds.toDouble();
   late double _endSilence = widget.initial.endSilenceSeconds;
   late final List<String> _keywords = List.of(widget.initial.keywords);
+  late SimpleStyle _style = widget.initialStyle;
   final _kwCtrl = TextEditingController();
 
   @override
@@ -65,7 +71,32 @@ class _ConversationSettingsSheetState extends State<ConversationSettingsSheet> {
               Text('對話設定', style: theme.textTheme.titleLarge),
               const SizedBox(height: 4),
               Text('簡易模式用；每次改動會馬上存起來', style: muted),
-              const SizedBox(height: 8),
+              const SizedBox(height: 14),
+
+              if (widget.onStyleChanged != null) ...[
+                Text('畫面風格', style: theme.textTheme.titleMedium),
+                const SizedBox(height: 4),
+                Text('整個簡易模式畫面一起換（背景、卡片、按鈕、麥克風）；「傳統」是原本的樣子。',
+                    style: muted),
+                const SizedBox(height: 10),
+                // 放不下就換行，五個都直接看得到
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final s in [SimpleStyleSpec.classic, ...SimpleStyleSpec.all])
+                      SimpleStyleSwatch(
+                        spec: s,
+                        selected: _style == s.id,
+                        onTap: () {
+                          setState(() => _style = s.id);
+                          widget.onStyleChanged?.call(s.id);
+                        },
+                      ),
+                  ],
+                ),
+                const Divider(height: 28),
+              ],
 
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,

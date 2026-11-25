@@ -28,6 +28,7 @@ import '../../voice/mobile_voice_output.dart';
 import '../../voice/voice_mode.dart';
 import '../../voice/voice_settings.dart';
 import 'conversation_settings_sheet.dart';
+import 'simple_style.dart';
 
 // ── 訊息資料模型 ──────────────────────────────────────────
 class ChatMessage {
@@ -128,6 +129,7 @@ class _ChatPageState extends State<ChatPage> {
   bool _ttsEnabled     = true;  // 語音回覆開關（右上角音量按鈕），會記住
   static const _kTtsEnabled = 'tts_enabled';
   bool _simpleMode = false; // 左滑／右滑或點標題切換；兩個畫面共用同一份對話與選好的櫃子
+  SimpleStyle _simpleStyle = SimpleStyle.classic; // 簡易模式的畫面風格（對話設定裡選）
   final PageController _pager = PageController(initialPage: 1);
 
   late final ChatOrchestrator _chat;
@@ -267,6 +269,9 @@ class _ChatPageState extends State<ChatPage> {
       _voice.settings = s;
       if (mounted) setState(() {});
     }));
+    unawaited(SimpleStyleSpec.load().then((s) {
+      if (mounted) setState(() => _simpleStyle = s);
+    }));
 
     _voice.setMode(VoiceMode.pushToTalk);
     _initVoice();
@@ -394,6 +399,11 @@ class _ChatPageState extends State<ChatPage> {
           _voice.settings = s;
           unawaited(s.save());
           if (mounted) setState(() {});
+        },
+        initialStyle: _simpleStyle,
+        onStyleChanged: (st) {
+          unawaited(SimpleStyleSpec.save(st));
+          if (mounted) setState(() => _simpleStyle = st);
         },
       ),
     );
@@ -1246,6 +1256,13 @@ class _ChatPageState extends State<ChatPage> {
 
     return Scaffold(
       appBar: AppBar(
+        // 簡易模式選了 A～D 風格：上方標題列跟著換成風格的底色
+        backgroundColor: _simpleMode && _simpleStyle != SimpleStyle.classic
+            ? SimpleStyleSpec.of(_simpleStyle).bg
+            : null,
+        foregroundColor: _simpleMode && _simpleStyle != SimpleStyle.classic
+            ? SimpleStyleSpec.of(_simpleStyle).text
+            : null,
         title: Tooltip(
           message: _simpleMode ? '切換到聊天模式' : '切換到簡易模式',
           child: InkWell(
@@ -1299,6 +1316,8 @@ class _ChatPageState extends State<ChatPage> {
                   _openVoiceSettings();
                 case 'conversation':
                   unawaited(_openConversationSettings());
+                case 'skill':
+                  _showSkillPicker();
                 case 'cabinet':
                   // 已選的櫃子一起帶進配置頁，之後兩邊保持同步
                   _openCabinetConfig();
@@ -1343,8 +1362,17 @@ class _ChatPageState extends State<ChatPage> {
                   const Icon(Icons.record_voice_over_rounded, size: 20),
                   const SizedBox(width: 12),
                   Text(_voice.settings.continuous
-                      ? '連續對話與插話（開）'
-                      : '連續對話與插話（關）'),
+                      ? '對話設定與風格（連續對話開）'
+                      : '對話設定與風格'),
+                ]),
+              ),
+              // 新版簡易畫面沒有最下面那一排了，切換助理放在這裡
+              const PopupMenuItem<String>(
+                value: 'skill',
+                child: Row(children: [
+                  Icon(Icons.swap_horiz_rounded, size: 20),
+                  SizedBox(width: 12),
+                  Text('切換助理'),
                 ]),
               ),
               const PopupMenuItem<String>(
@@ -1429,6 +1457,7 @@ class _ChatPageState extends State<ChatPage> {
               onMicTap: _onSimpleMicTap,
               onMicLongPress: () => unawaited(_openConversationSettings()),
               continuous: _voice.settings.continuous,
+              style: _simpleStyle,
               onBackToChat: _toggleSimpleMode,
               onPickSkill: _showSkillPicker,
               onOpenSettings: () => Navigator.pushNamed(context, '/settings'),
@@ -3439,6 +3468,7 @@ class _SimpleVoiceView extends StatefulWidget {
   final VoidCallback onMicTap, onBackToChat, onPickSkill, onOpenSettings;
   final VoidCallback? onMicLongPress; // 長按「你」：連續對話與插話設定
   final bool continuous; // 連續對話開著（「你」的標籤會標示）
+  final SimpleStyle style; // 畫面風格：傳統＝原本的版面；其他＝底部大麥克風版面＋整套配色
   final String? progressText; // 思考／查詢時 AI 格的字幕
   final bool pendingOrder; // 有新訂單等確認 → 顯示確認列
   final VoidCallback onConfirmOrder, onEditOrder;
@@ -3461,6 +3491,7 @@ class _SimpleVoiceView extends StatefulWidget {
   const _SimpleVoiceView({
     this.onMicLongPress,
     this.continuous = false,
+    this.style = SimpleStyle.classic,
     this.onEditMessage,
     this.editingText,
     this.onCancelEdit,
@@ -3508,10 +3539,15 @@ class _SimpleVoiceViewState extends State<_SimpleVoiceView>
     with SingleTickerProviderStateMixin {
   static const _wideBreakpoint = 840.0;
 
-  late final AnimationController _pulse = AnimationController(
-    vsync: this,
-    duration: const Duration(seconds: 2),
-  )..repeat();
+  // 傳統版面的呼吸動畫。一開始就建好：新版面用不到它，如果等到第一次用才建，
+  // 換成新版面後會在 dispose 時才第一次建立而出錯
+  late final AnimationController _pulse;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulse = AnimationController(vsync: this, duration: const Duration(seconds: 2))..repeat();
+  }
 
   @override
   void dispose() {
@@ -3529,8 +3565,9 @@ class _SimpleVoiceViewState extends State<_SimpleVoiceView>
 
   /// 選好的櫃子 + 「從目錄挑選」，跟聊天模式輸入列上的是同一份。
   /// 簡易模式不需要「送出」：每次說話都會自動把目前已選的櫃子與規格一起交給 AI。
-  Widget _pickedBar(BuildContext context) {
+  Widget _pickedBar(BuildContext context, {bool catalogRow = true}) {
     final busy = widget.isLoading || widget.isRecording;
+    final styled = widget.style != SimpleStyle.classic;
     final cs = Theme.of(context).colorScheme;
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
@@ -3547,7 +3584,10 @@ class _SimpleVoiceViewState extends State<_SimpleVoiceView>
               Icon(Icons.mic_rounded, size: 18, color: cs.onSecondaryContainer),
               const SizedBox(width: 8),
               Expanded(
-                child: Text('重說：「${widget.editingText}」，點「你」開始說',
+                child: Text(
+                    styled
+                        ? '重說：「${widget.editingText}」，按下面的麥克風開始說'
+                        : '重說：「${widget.editingText}」，點「你」開始說',
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(color: cs.onSecondaryContainer)),
@@ -3570,19 +3610,113 @@ class _SimpleVoiceViewState extends State<_SimpleVoiceView>
             price: widget.pickedPrice,
             busy: widget.pickedBusy,
           ),
-        Row(children: [
-          TextButton.icon(
-            style: TextButton.styleFrom(
-              visualDensity: VisualDensity.compact,
-              padding: const EdgeInsets.symmetric(horizontal: 8),
+        // 新版面的「目錄」在底部按鈕列，這一排只有傳統版面需要
+        if (catalogRow)
+          Row(children: [
+            TextButton.icon(
+              style: TextButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+              ),
+              onPressed: busy ? null : widget.onPick,
+              icon: const Icon(Icons.view_list_rounded, size: 18),
+              label: const Text('從目錄挑選'),
             ),
-            onPressed: busy ? null : widget.onPick,
-            icon: const Icon(Icons.view_list_rounded, size: 18),
-            label: const Text('從目錄挑選'),
-          ),
-          const Spacer(),
-        ]),
+            const Spacer(),
+          ]),
       ]),
+    );
+  }
+
+  /// 新版面（A～D 風格）：上面兩張狀態卡、中間文字對話、底部「目錄／麥克風／打字」。
+  /// 整個畫面套用風格的配色（文字對話、已選清單、訂單按鈕也一起換），傳統版面不走這裡。
+  Widget _buildStyled(BuildContext outer) {
+    final spec = SimpleStyleSpec.of(widget.style);
+    final state = _state;
+    final phase = switch (state) {
+      _SimpleState.idle => MicPhase.idle,
+      _SimpleState.listening => MicPhase.listening,
+      _SimpleState.thinking => MicPhase.thinking,
+      _SimpleState.speaking => MicPhase.speaking,
+    };
+    // 卡片只顯示純文字：拿掉 Markdown 符號（**粗體**、# 標題、- 清單）
+    String plain(String s) => s
+        .replaceAll(RegExp(r'\*\*|__|`'), '')
+        .replaceAll(RegExp(r'^\s*(#+|[-*•])\s*', multiLine: true), '')
+        .replaceAll(RegExp(r'\s*\n+\s*'), ' ')
+        .trim();
+    return Theme(
+      data: spec.apply(Theme.of(outer)),
+      // Material：讓沒指定顏色的文字也用這個風格的字色（App 是淺色模式時才不會深字疊深底）
+      child: Material(
+        type: MaterialType.transparency,
+        child: Builder(builder: (context) {
+        final reply = plain(widget.replyText);
+        final lastAi = widget.messages.isNotEmpty && !widget.messages.last.isUser
+            ? plain(widget.messages.last.text)
+            : '';
+        final aiText = state == _SimpleState.thinking
+            ? (widget.progressText ?? '正在查詢資料…')
+            : reply.isNotEmpty
+                ? reply
+                : lastAi.isNotEmpty
+                    ? lastAi
+                    : '有問題直接按下面的麥克風問我';
+        final heard = widget.heardText.trim();
+        final userText = heard.isNotEmpty
+            ? heard
+            : state == _SimpleState.listening
+                ? '請說話…'
+                : (widget.continuous ? '連續對話：按麥克風開始' : '按下面的麥克風說話');
+        return SimpleBackdrop(
+          spec: spec,
+          child: SafeArea(
+            top: false,
+            child: LayoutBuilder(builder: (context, box) {
+              final wide = box.maxWidth >= _wideBreakpoint;
+              return Column(children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+                  child: SimpleStatusCards(
+                    spec: spec,
+                    phase: phase,
+                    aiText: aiText,
+                    userText: userText,
+                    // AI 回答時點 AI 卡也能打斷
+                    onAiTap: state == _SimpleState.speaking ? widget.onMicTap : null,
+                  ),
+                ),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                    child: DockRegion(
+                      controller: GetIt.instance<CabinetWebController>(),
+                      child: _transcriptPanel(context, state,
+                          compact: !wide, radius: spec.radius),
+                    ),
+                  ),
+                ),
+                _pickedBar(context, catalogRow: false),
+                if (widget.pendingOrder) _orderBar(context)
+                else if (widget.onReopenPicker != null) _reopenPickBar(context)
+                else if (widget.actionLinks.isNotEmpty) _linkBar(context),
+                SimpleDock(
+                  spec: spec,
+                  phase: phase,
+                  level: widget.micLevel,
+                  continuous: widget.continuous,
+                  onMicTap: state == _SimpleState.thinking ? null : widget.onMicTap,
+                  onMicLongPress: widget.onMicLongPress,
+                  onCatalog: widget.onPick,
+                  onKeyboard: widget.onBackToChat,
+                  sideEnabled: !widget.isLoading && !widget.isRecording,
+                ),
+              ]);
+            }),
+          ),
+        );
+      }),
+      ),
     );
   }
 
@@ -3614,6 +3748,9 @@ class _SimpleVoiceViewState extends State<_SimpleVoiceView>
         ),
       );
     }
+
+    // A～D 風格：新版面；傳統：下面原本的版面，完全不變
+    if (widget.style != SimpleStyle.classic) return _buildStyled(context);
 
     final state = _state;
     return SafeArea(
@@ -4040,7 +4177,7 @@ class _SimpleVoiceViewState extends State<_SimpleVoiceView>
   // 文字對話（即時更新）
   // ══════════════════════════════════════════════════════
   Widget _transcriptPanel(BuildContext context, _SimpleState state,
-      {required bool compact}) {
+      {required bool compact, double? radius}) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
 
@@ -4070,7 +4207,7 @@ class _SimpleVoiceViewState extends State<_SimpleVoiceView>
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         color: cs.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(compact ? 18 : 20),
+        borderRadius: BorderRadius.circular(radius ?? (compact ? 18 : 20)),
         border: Border.all(color: cs.outlineVariant),
       ),
       child: Column(children: [
@@ -4419,21 +4556,33 @@ class _TranscriptList extends StatelessWidget {
 Widget buildSimpleViewForTest({
   required List<PickedItem> picked,
   required List<ChatMessage> messages,
+  SimpleStyle style = SimpleStyle.classic,
+  bool isRecording = false,
+  bool isLoading = false,
+  bool isSpeaking = false,
+  bool continuous = false,
+  VoidCallback? onMicTap,
+  VoidCallback? onMicLongPress,
+  VoidCallback? onPick,
+  VoidCallback? onBackToChat,
 }) =>
     _SimpleVoiceView(
       voiceAvailable: true,
-      isRecording: false,
-      isLoading: false,
-      isSpeaking: false,
-      heardText: '',
-      replyText: '',
-      micLevel: ValueNotifier<double>(0),
+      isRecording: isRecording,
+      isLoading: isLoading,
+      isSpeaking: isSpeaking,
+      style: style,
+      continuous: continuous,
+      onMicLongPress: onMicLongPress,
+      heardText: isRecording ? '女兒房的 A01-1 改兩個' : '',
+      replyText: isSpeaking ? '好的，已改成 2 個' : '',
+      micLevel: ValueNotifier<double>(isRecording ? 0.6 : 0),
       messages: messages,
       skillIcon: '🗄️',
       skillName: 'x',
       endpointName: 'y',
-      onMicTap: () {},
-      onBackToChat: () {},
+      onMicTap: onMicTap ?? () {},
+      onBackToChat: onBackToChat ?? () {},
       onPickSkill: () {},
       onOpenSettings: () {},
       progressText: null,
@@ -4441,7 +4590,7 @@ Widget buildSimpleViewForTest({
       onConfirmOrder: () {},
       onEditOrder: () {},
       picked: picked,
-      onPick: () {},
+      onPick: onPick ?? () {},
       onSendPicked: () {},
       onRemovePicked: (_) {},
       onPickedQty: (_, __) {},
