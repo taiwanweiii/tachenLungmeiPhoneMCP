@@ -317,6 +317,8 @@ class _ChatPageState extends State<ChatPage> {
   // ── 簡易模式 ──────────────────────────────────────────
   void _toggleSimpleMode() {
     HapticFeedback.selectionClick();
+    // 切到簡易模式：先收起鍵盤（簡易模式沒有輸入框，鍵盤留著會擋住畫面）
+    if (!_simpleMode) FocusManager.instance.primaryFocus?.unfocus();
     _pager.animateToPage(
       _simpleMode ? 1 : 0,
       duration: const Duration(milliseconds: 280),
@@ -328,6 +330,8 @@ class _ChatPageState extends State<ChatPage> {
   void _onPageChanged(int i) {
     final simple = i == 0;
     if (simple == _simpleMode) return;
+    // 用滑的切到簡易模式也一樣收起鍵盤
+    if (simple) FocusManager.instance.primaryFocus?.unfocus();
     if (_isRecording) _voice.stopTurn();
     if (_isSpeaking) _voice.stopSpeaking();
     setState(() => _simpleMode = simple);
