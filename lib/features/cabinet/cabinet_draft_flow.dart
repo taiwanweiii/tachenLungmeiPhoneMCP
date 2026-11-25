@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import '../../models/mcp_models.dart';
 import '../../services/mcp_client_service.dart';
 import 'cabinet_web_controller.dart';
 
@@ -27,6 +29,55 @@ class CabinetDraftFlow {
   /// 目前視窗正在處理的草稿：存檔成功後要回報哪些柜子
   String? _draftId;
   List<String> _appliedIds = const [];
+
+  /// 取草稿裡還沒存進案件的柜子。優先用 MCP 工具（走 /mcp，經過網站的 MCP proxy 也能用；
+  /// proxy 不轉發 /drafts，直接打 HTTP 會拿到網頁 HTML）；舊版 MCP 沒有這個工具才改打 /drafts。
+  Future<dynamic> _getDraft(String draftId) async {
+    final text = await _tool('get_pending_draft', {'caseNo': draftId});
+    if (text != null) return jsonDecode(text);
+    return _mcp.httpJson('GET', '/drafts/${Uri.encodeComponent(draftId)}');
+  }
+
+  /// 回報這批柜子已存進案件（從草稿移除）。失敗不影響已存的案件。
+  Future<void> _markApplied(String draftId, List<String> ids) async {
+    try {
+      final text =
+          await _tool('mark_draft_applied', {'caseNo': draftId, 'cabinets': ids});
+      if (text != null) return;
+      await _mcp.httpJson(
+          'POST', '/drafts/${Uri.encodeComponent(draftId)}/applied',
+          body: {'cabinets': ids});
+    } catch (err) {
+      debugPrint('⚠️ 回報草稿已套用失敗：$err');
+    }
+  }
+
+  /// 呼叫 MCP 工具，回傳文字結果；MCP 沒有這個工具回傳 null（呼叫端改走舊的 HTTP 端點）。
+  /// 工具回報失敗丟例外。
+  Future<String?> _tool(String name, Map<String, dynamic> args) async {
+    final ToolResult? r;
+    try {
+      r = await _mcp.callToolAsync(name, args);
+    } catch (e) {
+      if ('$e'.contains('找不到工具')) return null;
+      rethrow;
+    }
+    final text = (r?.content ?? const <ToolContent>[])
+        .where((c) => c.type == 'text')
+        .map((c) => c.text ?? '')
+        .join('')
+        .trim();
+    if (r == null || r.isError == true) {
+      throw Exception(text.isEmpty ? '伺服器沒有回應' : text);
+    }
+    return text;
+  }
+
+  /// 例外轉成給人看的原因（不要出現 FormatException 這種字）
+  static String _reason(Object e) {
+    if (e is FormatException) return '伺服器回傳的不是草稿資料';
+    return '$e'.replaceFirst(RegExp(r'^\w*(Exception|Error): '), '');
+  }
 
   /// 解析「更新詢單」連結；不是這種連結回傳 null
   static ({
@@ -77,8 +128,7 @@ class CabinetDraftFlow {
         (ok: false, message: m, price: null);
     try {
       await bg.openCase(p.caseNo, roomId: p.roomId, closetId: p.closetId);
-      final draft =
-          await _mcp.httpJson('GET', '/drafts/${Uri.encodeComponent(p.draft)}');
+      final draft = await _getDraft(p.draft);
       final (cabinets, ids) = _pickNewCabinets(draft, p.space, p.wall);
       if (cabinets.isEmpty) return fail('草稿這面牆沒有要新增的柜子');
       if (!await bg.waitUntilReady()) return fail('網頁載入逾時');
@@ -100,16 +150,10 @@ class CabinetDraftFlow {
       }
       if (s['ok'] != true) return fail('${s['message'] ?? '存檔失敗'}');
       // 已存進案件：把這批柜子從 MCP 草稿移除（失敗不影響已存的案件）
-      unawaited(_mcp
-          .httpJson('POST', '/drafts/${Uri.encodeComponent(p.draft)}/applied',
-              body: {'cabinets': ids})
-          .catchError((Object err) {
-        debugPrint('⚠️ 回報草稿已套用失敗：$err');
-        return null;
-      }));
+      unawaited(_markApplied(p.draft, ids));
       return (ok: true, message: '', price: s['price'] as num?);
     } catch (e) {
-      return fail('${e is Exception ? '$e'.replaceFirst('Exception: ', '') : e}');
+      return fail(_reason(e));
     } finally {
       bg.close();
     }
@@ -125,10 +169,10 @@ class CabinetDraftFlow {
     List<Map<String, dynamic>> cabinets;
     List<String> ids;
     try {
-      final draft = await _mcp.httpJson('GET', '/drafts/${Uri.encodeComponent(draftId)}');
+      final draft = await _getDraft(draftId);
       (cabinets, ids) = _pickNewCabinets(draft, spaceId, wallId);
     } catch (e) {
-      _ctrl.onLoadError('取得草稿失敗：${'$e'.replaceFirst('Exception: ', '')}');
+      _ctrl.onLoadError('取得草稿失敗：${_reason(e)}');
       return;
     }
     if (cabinets.isEmpty) {
@@ -183,12 +227,6 @@ class CabinetDraftFlow {
     _draftId = null;
     _appliedIds = const [];
     // 存檔成功：把這批柜子從 MCP 草稿移除（失敗不影響已存的案件，使用者之後可手動清草稿）
-    unawaited(_mcp
-        .httpJson('POST', '/drafts/${Uri.encodeComponent(draftId)}/applied',
-            body: {'cabinets': ids})
-        .catchError((Object err) {
-      debugPrint('⚠️ 回報草稿已套用失敗：$err');
-      return null;
-    }));
+    unawaited(_markApplied(draftId, ids));
   }
 }

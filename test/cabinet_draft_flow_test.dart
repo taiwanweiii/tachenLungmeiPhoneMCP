@@ -1,4 +1,7 @@
+import 'dart:convert';
+
 import 'package:curtain_mcp_flutter/core/config/app_config.dart';
+import 'package:curtain_mcp_flutter/models/mcp_models.dart';
 import 'package:curtain_mcp_flutter/features/cabinet/cabinet_draft_flow.dart';
 import 'package:curtain_mcp_flutter/features/cabinet/cabinet_transport.dart';
 import 'package:curtain_mcp_flutter/features/cabinet/cabinet_web_controller.dart';
@@ -30,11 +33,33 @@ class FakeTransport implements CabinetTransport {
   Future<void> reload(Uri uri) async {}
 }
 
-/// 假的 MCP：記錄 HTTP 呼叫、回傳固定草稿
+/// 假的 MCP：記錄 HTTP 呼叫、回傳固定草稿。
+/// [hasTools] = true 模擬新版 MCP（有 get_pending_draft／mark_draft_applied 工具，經 proxy 也能用）；
+/// false 模擬舊版（沒有工具，改打 /drafts HTTP 端點）。
 class FakeMcp extends McpClientService {
   FakeMcp() : super(Dio(), AppConfig());
   final requests = <(String, String, Object?)>[];
+  final toolCalls = <(String, Map<String, dynamic>)>[];
   dynamic draft;
+  bool hasTools = false;
+
+  @override
+  Future<ToolResult?> callToolAsync(
+      String toolName, Map<String, dynamic> args) async {
+    if (!hasTools) throw Exception('找不到工具「$toolName」，可能所屬的 MCP Server 已關閉');
+    toolCalls.add((toolName, args));
+    if (toolName == 'get_pending_draft') {
+      if (draft == null) {
+        return ToolResult(isError: true, content: [
+          ToolContent(type: 'text', text: '找不到案件 ${args['caseNo']} 的待套用草稿')
+        ]);
+      }
+      return ToolResult(
+          content: [ToolContent(type: 'text', text: jsonEncode(draft))]);
+    }
+    return ToolResult(
+        content: [ToolContent(type: 'text', text: '{"removed":1}')]);
+  }
 
   @override
   Future<dynamic> httpJson(String method, String path, {Object? body}) async {
@@ -45,6 +70,13 @@ class FakeMcp extends McpClientService {
     }
     return {'removed': 1};
   }
+}
+
+/// 舊版 MCP 經網站 proxy：/drafts 不轉發，拿到的是網頁 HTML（解析 JSON 會失敗）
+class _HtmlMcp extends FakeMcp {
+  @override
+  Future<dynamic> httpJson(String method, String path, {Object? body}) async =>
+      jsonDecode('<!doctype html><html></html>');
 }
 
 Map<String, dynamic> cab(String id, String status, String pn) => {
@@ -233,6 +265,31 @@ void main() {
       expect(r?.message, contains('用料選項'));
       expect(mcp.requests.where((r) => r.$1 == 'POST'), isEmpty);
       expect(bg.isOpen, false);
+    });
+
+    test('新版 MCP：草稿走 MCP 工具（經網站 proxy 也能用），不打 /drafts', () async {
+      mcp.hasTools = true;
+      final r = await run();
+      expect(r?.ok, true);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(mcp.requests, isEmpty); // 完全沒打 HTTP /drafts
+      expect(mcp.toolCalls.first.$1, 'get_pending_draft');
+      expect(mcp.toolCalls.first.$2['caseNo'], '261100M');
+      final mark = mcp.toolCalls.firstWhere((c) => c.$1 == 'mark_draft_applied');
+      expect(mark.$2['cabinets'], ['s1:w1:c1', 's1:w1:c3']);
+    });
+
+    test('草稿回來不是 JSON（例如被網頁 HTML 擋下）：顯示看得懂的原因', () async {
+      final bad = _HtmlMcp();
+      final f2 = CabinetDraftFlow(ctrl, bad);
+      final fut = f2.autoSave(link, bg);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      bg.attachTransport(btp);
+      await bg.onPageLoaded();
+      final r = await fut;
+      expect(r?.ok, false);
+      expect(r?.message, '伺服器回傳的不是草稿資料');
+      expect(r?.message, isNot(contains('Exception')));
     });
 
     test('不是更新詢單連結：不處理', () async {
