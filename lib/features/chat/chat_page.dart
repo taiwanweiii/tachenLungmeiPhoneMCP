@@ -1143,13 +1143,26 @@ class _ChatPageState extends State<ChatPage> {
     ));
   }
 
+  /// 清除 MCP 上的草稿（還沒存進案件的櫃子），結果用提示告訴使用者
+  Future<void> _clearDrafts() async {
+    final err = await _chat.clearDrafts();
+    if (!mounted) return;
+    if (err == null) {
+      _showSnack('對話、已選的櫃子與草稿都已清除');
+    } else {
+      _showSnack('對話與已選的櫃子已清除，但草稿清除失敗：$err', isError: true);
+    }
+  }
+
   void _showClearDialog() {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
         icon: const Icon(Icons.delete_outline_rounded, size: 36),
         title: const Text('清除對話'),
-        content: const Text('確定要清除所有對話記錄嗎？\nAI 將從頭開始對話。'),
+        content: const Text('確定要清除嗎？\n'
+            '對話記錄、已選的櫃子、還沒存進案件的草稿都會一起清掉，AI 從頭開始。\n'
+            '（已經建立的正式案件不受影響）'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context), child: const Text('取消')),
@@ -1162,11 +1175,13 @@ class _ChatPageState extends State<ChatPage> {
                   if (_editing != null) _ctrl.text = _draftBeforeEdit;
                   _editing = null;
                   _draftBeforeEdit = '';
-                  // AI 的記憶已清空：已選清單要當成「還沒送給 AI」，下一則訊息才會再附上
+                  // 已選的櫃子也一起清掉
+                  _picked.clear();
                   _sentPickedSig = '';
                 });
+                _syncPickedToConfig();
                 Navigator.pop(context);
-                _showSnack('對話已清除');
+                unawaited(_clearDrafts());
               },
               child: const Text('清除')),
         ],

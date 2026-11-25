@@ -928,6 +928,26 @@ class ChatOrchestrator {
   void clearHistory() {
     _history.removeWhere((m) => m.role != 'system');
     _pendingOrderArgs = null;
+    _lastCustomer = null;
+    _lastOrderWall = null;
+  }
+
+  /// 清除 MCP 上目前登入身分底下的所有草稿（「清除對話」用，不經過 AI）。
+  /// 成功回 null，失敗回原因。
+  Future<String?> clearDrafts() async {
+    try {
+      final r = await _mcp.callToolAsync('clear_all_drafts', const {});
+      if (r == null || r.isError == true) {
+        final msg = (r?.content ?? const <ToolContent>[])
+            .map((c) => c.text ?? '')
+            .join(' ')
+            .trim();
+        return msg.isEmpty ? '伺服器沒有回應' : msg;
+      }
+      return null;
+    } catch (e) {
+      return '$e'.replaceFirst('Exception: ', '');
+    }
   }
 
   // ── 對話分支：存下／還原某一刻的對話狀態 ─────────────
