@@ -13,6 +13,9 @@ class VoiceOrchestrator {
   /// 就不送給 AI。
   Future<bool> Function(String text)? interceptTranscript;
 
+  /// 語音送給 AI 時，另外附上只給模型看的備註（例如目前已選的櫃子與規格）。回傳 null 就不附。
+  String? Function()? aiNoteProvider;
+
   void Function(String)?  onTranscribed;
   void Function(String)?  onPartialTranscript;
   void Function(double)?  onMicLevel; // 說話音量 0 ~ 1
@@ -128,7 +131,7 @@ class VoiceOrchestrator {
   Future<void> _processText(String text) async {
     try {
       // ✅ 解構 Record，語音只需要 content，toolsUsed 忽略
-      final (:content, toolsUsed: _) = await _chat.sendMessageAsync(text, voice: true);
+      final (:content, toolsUsed: _) = await _chat.sendMessageAsync(text, voice: true, aiNote: aiNoteProvider?.call());
       onResponse?.call(content);
       await speakReply(content);
     } catch (e) {

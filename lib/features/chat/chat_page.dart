@@ -211,6 +211,12 @@ class _ChatPageState extends State<ChatPage> {
       final r = await c.voiceCommand(text);
       return r['handled'] == true;
     };
+    // 簡易模式語音直接送給 AI（不經過輸入框），一樣附上目前已選的櫃子與規格
+    _voice.aiNoteProvider = () {
+      if (_picked.isEmpty) return null;
+      _sentPickedSig = pickedSignature(_picked);
+      return _pickedNote();
+    };
     _voice.onTranscribed = (text) {
       setState(() {
         _heardText = text;
@@ -540,6 +546,10 @@ class _ChatPageState extends State<ChatPage> {
   bool get _pickedUnsent =>
       _picked.isNotEmpty && pickedSignature(_picked) != _sentPickedSig;
 
+  /// 只給模型看的「目前已選的櫃子」（品號、數量、規格參數、還沒選的項目）
+  String _pickedNote() => '目前已選的櫃子（畫面上已經選好，不用再問品號與規格）：\n'
+      '${_picked.map((p) => '- ${p.forAi}').join('\n')}';
+
   /// 輸入框的字 + 挑選的櫃子，組成要送給 AI 的一句話
   String _compose(String text) {
     final t = text.trim();
@@ -816,8 +826,7 @@ class _ChatPageState extends State<ChatPage> {
     final trimmed = _compose(text);
     if (trimmed.isEmpty) return;
     if (_picked.isNotEmpty && !listInMessage) {
-      final cur = '目前已選的櫃子（畫面上已經選好，不用再問品號與規格）：\n'
-          '${_picked.map((p) => '- ${p.forAi}').join('\n')}';
+      final cur = _pickedNote();
       aiNote = (aiNote == null || aiNote.isEmpty) ? cur : '$aiNote\n$cur';
     }
     _ctrl.clear();
