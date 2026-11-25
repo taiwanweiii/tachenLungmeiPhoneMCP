@@ -438,6 +438,11 @@ class ChatOrchestrator {
   bool _lastReplyPendingOrder = false;
   bool get lastReplyPendingOrder => _lastReplyPendingOrder;
 
+  /// 這次回覆中使用者用說的確認建立（模型帶 confirmed=true 且畫面上有待確認的摘要）。
+  /// 聊天頁看到就用摘要當時的參數正式建立，跟按「確認建立」一樣。
+  bool _lastConfirmRequested = false;
+  bool get lastConfirmRequested => _lastConfirmRequested;
+
   // ── 傳送訊息 ──────────────────────────────────────────
   /// [aiNote]：只給模型看的補充（例如配置畫面的牆面與座標）。會接在使用者訊息後面送給模型，
   /// 但不會顯示在聊天畫面（畫面上顯示的是 [userMessage]）。
@@ -445,6 +450,7 @@ class ChatOrchestrator {
       String userMessage, {bool voice = false, String? aiNote}) async {
     _voiceReply = voice;
     _lastReplyPendingOrder = false;
+    _lastConfirmRequested = false;
     _lastPickRequested = false;
     _lastOpenConfigRequested = false;
     _lastMoves.clear();
@@ -627,8 +633,19 @@ class ChatOrchestrator {
             _lastOrderWall = normalizeWall(callArgs['wallName']);
           }
           if (isOrder && callArgs['confirmed'] == true) {
+            // 使用者用說的確認：畫面上已經有待確認的摘要、而且這一輪沒有產生新摘要，
+            // 才交給聊天頁「照摘要當時的參數」正式建立（跟按「確認建立」同一條路，模型改不了內容）
+            if (_pendingOrderArgs != null && !_lastReplyPendingOrder) {
+              _lastConfirmRequested = true;
+              _t(TraceKind.answer, '使用者用說的確認建立訂單',
+                  detail: '不採用模型帶的參數，聊天頁會用畫面上那份摘要的參數正式建立');
+              const msg = '已交給 App 依照畫面上的摘要正式建立。請只回一句「好的，正在建立訂單」，不要寫案號或金額。';
+              _history.add(OllamaMessage(
+                  role: 'tool', name: fn.name, toolCallId: tc.id, content: msg));
+              continue;
+            }
             callArgs = Map<String, dynamic>.from(callArgs)..remove('confirmed');
-            _t(TraceKind.blocked, '正式建立訂單只能按「確認建立」按鈕',
+            _t(TraceKind.blocked, '還沒有使用者看過的摘要，不能直接建立',
                 detail: '模型想直接建立，已改成只產生摘要');
           }
           try {
@@ -705,8 +722,8 @@ class ChatOrchestrator {
               _lastReplyPendingOrder = ok;
               if (ok) {
                 toolResult = '摘要已經顯示在使用者畫面上，下面有「確認建立」和「修改」按鈕。'
-                    '請只回一句「請確認以上內容，沒問題請按「確認建立」。」，'
-                    '不要重貼摘要，也不要自己建立訂單。';
+                    '請只回一句「請確認以上內容，沒問題請按「確認建立」或說「確認建立」。」，'
+                    '不要重貼摘要，這一輪也不要建立訂單。';
               }
             }
           } catch (e) {
@@ -774,7 +791,7 @@ class ChatOrchestrator {
             detail: '有待確認的新訂單時，訂單只能按按鈕建立\n\n'
                 '模型原本的回答：\n${_clip(modelContent)}');
       }
-      modelContent = '訂單**還沒建立**。請確認以上內容，沒問題請按「確認建立」；要改的話按「修改」。';
+      modelContent = '訂單**還沒建立**。請確認以上內容，沒問題請按或說「確認建立」；要改的話按「修改」。';
     }
 
     // 工具要直接給使用者看的內容放在前面；模型已經貼過的就不重複

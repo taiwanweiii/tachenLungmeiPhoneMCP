@@ -244,6 +244,8 @@ class _ChatPageState extends State<ChatPage> {
       if (_chat.lastPickRequested) _openPicker(preselect: _chat.lastPickPreselect);
       // AI 判斷使用者想看畫面／介面
       if (_chat.lastOpenConfigRequested) _openConfigByAi();
+      // 使用者用說的確認建立：照畫面上的摘要正式建立
+      if (_chat.lastConfirmRequested) unawaited(_confirmOrder(spoken: true));
     };
     _voice.onError = (err) {
       setState(() => _isLoading = false);
@@ -427,11 +429,13 @@ class _ChatPageState extends State<ChatPage> {
       _chat.hasPendingOrder;
 
   /// 按「確認建立」：直接正式建立，不經過 AI
-  Future<void> _confirmOrder() async {
+  /// [spoken]：使用者用說的確認（AI 判斷後交給 App）。說的這句已經是明確確認，不再跳確認視窗，
+  /// 也不另外加「確認建立」的訊息（使用者說的那句已經在畫面上）。
+  Future<void> _confirmOrder({bool spoken = false}) async {
     if (_isLoading || !_chat.hasPendingOrder) return;
     HapticFeedback.mediumImpact();
-    // 建立後無法刪除：再確認一次，避免誤按
-    final ok = await showDialog<bool>(
+    // 建立後無法刪除：按按鈕的再確認一次，避免誤按
+    final ok = spoken ? true : await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('建立正式案件？'),
@@ -452,7 +456,7 @@ class _ChatPageState extends State<ChatPage> {
     );
     if (ok != true || !mounted) return;
     setState(() {
-      _messages.add(ChatMessage(text: '確認建立', isUser: true));
+      if (!spoken) _messages.add(ChatMessage(text: '確認建立', isUser: true));
       _isLoading = true;
     });
     _scrollToBottom();
@@ -888,6 +892,8 @@ class _ChatPageState extends State<ChatPage> {
       }
       // AI 判斷使用者想看畫面／介面：開系統櫃配置網頁並收鍵盤
       if (_chat.lastOpenConfigRequested) _openConfigByAi();
+      // 使用者說「確認建立」：照畫面上的摘要正式建立
+      if (_chat.lastConfirmRequested) unawaited(_confirmOrder(spoken: true));
     } catch (e) {
       // 失敗也留一則訊息，方便打開推理過程看卡在哪一步
       setState(() {
