@@ -10,7 +10,8 @@ import 'cabinet_web_controller.dart';
 /// App 攔下這種連結，不開外部瀏覽器，改成：
 ///   1. 在浮動視窗開 cabinet-config 編輯該案件的該櫃組（載入既有櫃體）
 ///   2. 向 MCP 取草稿（GET /drafts/{draft}），把這面牆「新增」的柜子灌進畫面
-///   3. 使用者看過價格後，按畫面上的「更新詢單」才真的存檔（這一步由人按，不是程式自動）
+///   3. 使用者看過價格後，按畫面上的「更新詢單」才真的存檔（點連結進來的這條路由人按）
+///      ※ 剛確認建立的新訂單改走 [autoSave]：使用者已經確認過，App 在背景直接存檔，不開畫面
 ///   4. 收到網頁的 saved 事件後，回報 MCP（POST /drafts/{draft}/applied）把已存的柜子從草稿移除
 /// 新牆面／新空間的連結（/app/order/store/…）這裡不處理，照舊用外部瀏覽器開。
 class CabinetDraftFlow {
@@ -27,22 +28,91 @@ class CabinetDraftFlow {
   String? _draftId;
   List<String> _appliedIds = const [];
 
-  /// 給 openLink 用的攔截器。回傳 true = 已處理（不要再開外部瀏覽器）。
-  bool handleLink(String url) {
+  /// 解析「更新詢單」連結；不是這種連結回傳 null
+  static ({
+    String caseNo,
+    String roomId,
+    String closetId,
+    String draft,
+    String space,
+    String wall
+  })? parseLink(String url) {
     final uri = Uri.tryParse(url);
-    if (uri == null) return false;
+    if (uri == null) return null;
     final m = _linkRe.firstMatch(uri.path);
     final draft = uri.queryParameters['draft'];
     final space = uri.queryParameters['space'];
     final wall = uri.queryParameters['wall'];
     if (m == null || draft == null || space == null || wall == null) {
-      return false;
+      return null;
     }
-    final caseNo = Uri.decodeComponent(m.group(1)!);
-    final roomId = Uri.decodeComponent(m.group(2)!);
-    final closetId = Uri.decodeComponent(m.group(3)!);
-    unawaited(_run(caseNo, roomId, closetId, draft, space, wall));
+    return (
+      caseNo: Uri.decodeComponent(m.group(1)!),
+      roomId: Uri.decodeComponent(m.group(2)!),
+      closetId: Uri.decodeComponent(m.group(3)!),
+      draft: draft,
+      space: space,
+      wall: wall,
+    );
+  }
+
+  /// 給 openLink 用的攔截器。回傳 true = 已處理（不要再開外部瀏覽器）。
+  bool handleLink(String url) {
+    final p = parseLink(url);
+    if (p == null) return false;
+    unawaited(_run(p.caseNo, p.roomId, p.closetId, p.draft, p.space, p.wall));
     return true;
+  }
+
+  /// 建單後自動存檔（不開畫面）：使用者已經確認建立訂單（按按鈕或說「確認建立」），
+  /// 所以在看不見的背景配置頁 [bg] 載入剛建立的案件櫃組、套入草稿的櫃子、算好價格後
+  /// 直接「更新詢單」寫進案件，不用再點連結到網頁按。
+  /// 連結不是「更新詢單」格式回傳 null（照舊讓使用者點）。結束後關掉背景頁，
+  /// 之後已選清單有東西時會重新開來試算。
+  Future<({bool ok, String message, num? price})?> autoSave(
+      String url, CabinetWebController bg) async {
+    final p = parseLink(url);
+    if (p == null) return null;
+    ({bool ok, String message, num? price}) fail(String m) =>
+        (ok: false, message: m, price: null);
+    try {
+      await bg.openCase(p.caseNo, roomId: p.roomId, closetId: p.closetId);
+      final draft =
+          await _mcp.httpJson('GET', '/drafts/${Uri.encodeComponent(p.draft)}');
+      final (cabinets, ids) = _pickNewCabinets(draft, p.space, p.wall);
+      if (cabinets.isEmpty) return fail('草稿這面牆沒有要新增的柜子');
+      if (!await bg.waitUntilReady()) return fail('網頁載入逾時');
+      final r = await bg.applyDraft({'cabinets': cabinets}, clear: false);
+      if (r['ok'] != true) {
+        final missing = (r['missing'] as List?)?.join('、');
+        return fail(missing != null && missing.isNotEmpty
+            ? '這些品號在網頁找不到：$missing'
+            : '${r['message'] ?? '套入櫃子失敗'}');
+      }
+      await bg.waitSettled();
+      // 網頁還在算價或資料還沒載完會回「請稍候」：每 3 秒再試，最多約 2 分鐘
+      var s = <String, dynamic>{};
+      for (var i = 0; i < 40; i++) {
+        s = await bg.updateCase();
+        if (s['ok'] == true) break;
+        if (!'${s['message'] ?? ''}'.contains('稍候')) break;
+        await Future<void>.delayed(const Duration(seconds: 3));
+      }
+      if (s['ok'] != true) return fail('${s['message'] ?? '存檔失敗'}');
+      // 已存進案件：把這批柜子從 MCP 草稿移除（失敗不影響已存的案件）
+      unawaited(_mcp
+          .httpJson('POST', '/drafts/${Uri.encodeComponent(p.draft)}/applied',
+              body: {'cabinets': ids})
+          .catchError((Object err) {
+        debugPrint('⚠️ 回報草稿已套用失敗：$err');
+        return null;
+      }));
+      return (ok: true, message: '', price: s['price'] as num?);
+    } catch (e) {
+      return fail('${e is Exception ? '$e'.replaceFirst('Exception: ', '') : e}');
+    } finally {
+      bg.close();
+    }
   }
 
   Future<void> _run(String caseNo, String roomId, String closetId,

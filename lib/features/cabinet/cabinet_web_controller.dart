@@ -469,6 +469,10 @@ class CabinetWebController extends ChangeNotifier {
     return s;
   }
 
+  /// 等網頁算完（有價格、讀得到規格值），最多約 60 秒。建單後自動存檔前用。
+  Future<Map<String, dynamic>> waitSettled() =>
+      _readSettledState(expectCabinets: true);
+
   /// 每次把已選清單灌進配置頁、並讀回網頁狀態之後呼叫：
   /// (灌進去的清單, 網頁每顆櫃子對應哪個品項, 網頁現在的櫃子與實際規格值)
   void Function(List<PickedItem> synced, Map<String, PickedItem> sources,

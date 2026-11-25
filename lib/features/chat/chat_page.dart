@@ -19,6 +19,7 @@ import '../cabinet/cabinet_sync.dart';
 import '../cabinet/wall.dart';
 import '../../services/web_session.dart';
 import '../cabinet/cabinet_web_controller.dart';
+import '../cabinet/cabinet_draft_flow.dart';
 import '../cabinet/dock_region.dart';
 import '../cabinet/layout_message.dart';
 import '../../core/config/app_config.dart';
@@ -458,7 +459,14 @@ class _ChatPageState extends State<ChatPage> {
     });
     _scrollToBottom();
     try {
-      final (:content, :links) = await _chat.confirmPendingOrder();
+      final (content: raw, :links) = await _chat.confirmPendingOrder();
+      // 有「更新詢單」連結：App 會在背景自動存檔，不用使用者再開網頁（連結留著備用）
+      final autoSave = !raw.startsWith('⚠️') &&
+          links.any((l) => CabinetDraftFlow.parseLink(l.url) != null);
+      final content = autoSave
+          ? raw.replaceFirst('請點下面連結，在網頁確認價格後按「更新詢單」完成存檔：',
+              '櫃子與價格會自動存進案件，不用開網頁（下面的連結留著備用）：')
+          : raw;
       setState(() {
         _messages.add(ChatMessage(
           text: content,
@@ -476,9 +484,15 @@ class _ChatPageState extends State<ChatPage> {
           _sentPickedSig = '';
         }
       });
-      _voice.speakReply(content);
-      // 不再自動開啟「更新詢單」連結（會突然彈出視窗、還可能停在登入畫面）；
-      // 訊息下方有按鈕，要看再按
+      if (autoSave) {
+        // 不唸「請點連結」那一大段，存檔結果出來會再唸一次
+        _voice.speakReply('已建立案件，櫃子和價格正在自動存檔');
+        unawaited(_autoSaveCabinets(links));
+      } else {
+        _voice.speakReply(content);
+      }
+      // 不自動開啟「更新詢單」連結（會突然彈出視窗、還可能停在登入畫面）；
+      // 改在背景自動存檔，失敗時訊息下方的按鈕可以手動開
     } catch (e) {
       setState(() {
         _messages.add(ChatMessage(
@@ -491,6 +505,47 @@ class _ChatPageState extends State<ChatPage> {
       });
     }
     _scrollToBottom();
+  }
+
+  /// 建單成功後，把櫃子與價格自動存進案件：在看不見的背景配置頁載入案件、
+  /// 套入櫃子、算好價格後直接「更新詢單」，不用再點連結到網頁按。
+  /// 失敗就照實說，並留下連結按鈕讓使用者手動開。
+  Future<void> _autoSaveCabinets(List<({String label, String url})> links) async {
+    final targets = [
+      for (final l in links)
+        if (CabinetDraftFlow.parseLink(l.url) != null) l
+    ];
+    if (targets.isEmpty) return;
+    final flow = GetIt.instance<CabinetDraftFlow>();
+    final bg = GetIt.instance<CabinetWebController>(instanceName: 'quote');
+    setState(() => _messages.add(ChatMessage(
+        text: '櫃子與價格存檔中（約 1 分鐘，不用開畫面）…', isUser: false)));
+    _scrollToBottom();
+    final lines = <String>[];
+    final failed = <({String label, String url})>[];
+    for (final l in targets) {
+      final r = await flow.autoSave(l.url, bg);
+      if (r == null) continue;
+      if (r.ok) {
+        lines.add('✅ ${l.label}：已存進案件'
+            '${r.price != null ? '，NT\$ ${_PickedPanel._money(r.price!)}' : ''}');
+      } else {
+        failed.add(l);
+        lines.add('⚠️ ${l.label}：自動存檔失敗（${r.message}），'
+            '請按下面的按鈕到網頁按「更新詢單」');
+      }
+    }
+    if (!mounted || lines.isEmpty) return;
+    setState(() => _messages.add(ChatMessage(
+          text: lines.join('\n\n'),
+          isUser: false,
+          isError: failed.isNotEmpty,
+          actionLinks: failed,
+        )));
+    _scrollToBottom();
+    _voice.speakReply(failed.isEmpty
+        ? '櫃子和價格已經存進案件'
+        : '自動存檔失敗，請按按鈕到網頁更新詢單');
   }
 
   /// 按「修改」：輸入框帶入「我要修改：」，說完重新產生摘要

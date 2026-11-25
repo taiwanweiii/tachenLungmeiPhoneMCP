@@ -170,6 +170,78 @@ void main() {
     expect(tp.calls.any((c) => c.$1 == 'applyDraft'), false);
   });
 
+  group('建單後自動存檔（背景頁，不開畫面）', () {
+    late CabinetWebController bg;
+    late FakeTransport btp;
+
+    setUp(() {
+      bg = CabinetWebController(session, background: true);
+      btp = FakeTransport()
+        ..replies['whenReady'] = {'ok': true}
+        ..replies['applyDraft'] = {'ok': true, 'added': []}
+        // 算完的狀態：有價格、讀得到規格值
+        ..replies['getState'] = {
+          'ok': true,
+          'price': 7285,
+          'cabinets': [
+            {
+              'uuid': 'u1',
+              'productNo': 'A01',
+              'props': [
+                {'propsName': 'width', 'value': 600, 'type': 'NUMBER'},
+              ],
+            },
+          ],
+        }
+        ..replies['updateCase'] = {'ok': true, 'price': 7285};
+    });
+
+    Future<({bool ok, String message, num? price})?> run() async {
+      final f = flow.autoSave(link, bg);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      bg.attachTransport(btp);
+      await bg.onPageLoaded();
+      return f;
+    }
+
+    test('套入這面牆的新增柜子後直接更新詢單，回報 MCP，關掉背景頁', () async {
+      expect(bg.isOpen, false);
+      final r = await run();
+      expect(r?.ok, true);
+      expect(r?.price, 7285);
+      final apply = btp.calls.firstWhere((c) => c.$1 == 'applyDraft');
+      final applied = ((apply.$2[0] as Map)['cabinets'] as List)
+          .map((c) => (c as Map)['productNo'])
+          .toList();
+      expect(applied, ['A01', 'A03']);
+      expect((apply.$2[1] as Map)['clear'], false);
+      // 真的存檔（不是演練）
+      final upd = btp.calls.firstWhere((c) => c.$1 == 'updateCase');
+      expect((upd.$2[0] as Map)['dryRun'], false);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      final post = mcp.requests.where((r) => r.$1 == 'POST').toList();
+      expect(post.single.$2, '/drafts/261100M/applied');
+      expect(bg.isOpen, false); // 用完就關，之後試算會重新開
+      // 畫面上的系統櫃視窗完全沒被打開
+      expect(ctrl.isOpen, false);
+    });
+
+    test('網頁存檔失敗：回報失敗原因、不回報 MCP、一樣關掉背景頁', () async {
+      btp.replies['updateCase'] = {'ok': false, 'message': '用料選項需要重新確認'};
+      final r = await run();
+      expect(r?.ok, false);
+      expect(r?.message, contains('用料選項'));
+      expect(mcp.requests.where((r) => r.$1 == 'POST'), isEmpty);
+      expect(bg.isOpen, false);
+    });
+
+    test('不是更新詢單連結：不處理', () async {
+      final r = await flow.autoSave('https://example.com/app/order/store/X?newFlow=true', bg);
+      expect(r, isNull);
+      expect(bg.isOpen, false);
+    });
+  });
+
   test('這面牆沒有新增柜子：顯示錯誤', () async {
     mcp.draft = {
       'spaces': [
