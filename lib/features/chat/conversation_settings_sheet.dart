@@ -67,14 +67,31 @@ class _ConversationSettingsSheetState extends State<ConversationSettingsSheet> {
       // 鍵盤打開時整個往上推，輸入關鍵字時看得到
       padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
       child: SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          // 標題列固定在上面（往下捲也看得到）：左邊「返回」關掉設定回到上一頁
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 0, 20, 4),
+            child: Row(children: [
+              IconButton(
+                icon: const Icon(Icons.arrow_back_rounded),
+                tooltip: '返回',
+                onPressed: () => Navigator.of(context).maybePop(),
+              ),
+              const SizedBox(width: 4),
+              Expanded(child: Text('對話設定', style: theme.textTheme.titleLarge)),
+              TextButton(
+                onPressed: () => Navigator.of(context).maybePop(),
+                child: const Text('完成'),
+              ),
+            ]),
+          ),
+          Flexible(
         child: SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('對話設定', style: theme.textTheme.titleLarge),
-              const SizedBox(height: 4),
               Text('每次改動會馬上存起來', style: muted),
               const SizedBox(height: 14),
 
@@ -199,6 +216,8 @@ class _ConversationSettingsSheetState extends State<ConversationSettingsSheet> {
             ],
           ),
         ),
+          ),
+        ]),
       ),
     );
   }

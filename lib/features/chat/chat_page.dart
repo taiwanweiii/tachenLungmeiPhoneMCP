@@ -392,6 +392,7 @@ class _ChatPageState extends State<ChatPage> {
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
+      useSafeArea: true, // 不要蓋到最上面的狀態列，上面留一點點空白可以點掉
       builder: (_) => ConversationSettingsSheet(
         initial: _voice.settings,
         onChanged: (s) {

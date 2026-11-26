@@ -132,6 +132,46 @@ void main() {
     }
   });
 
+  for (final how in ['返回', '完成']) {
+    testWidgets('對話設定按「$how」會關掉，回到上一頁', (t) async {
+      t.view.physicalSize = const Size(780, 1688);
+      t.view.devicePixelRatio = 2;
+      addTearDown(t.view.reset);
+      await t.pumpWidget(MaterialApp(
+        theme: _appTheme(),
+        home: Scaffold(
+          body: Builder(
+            builder: (ctx) => TextButton(
+              onPressed: () => showModalBottomSheet<void>(
+                context: ctx,
+                isScrollControlled: true,
+                showDragHandle: true,
+                useSafeArea: true,
+                builder: (_) => ConversationSettingsSheet(
+                  initial: VoiceConversationSettings(),
+                  onChanged: (_) {},
+                  onStyleChanged: (_) {},
+                ),
+              ),
+              child: const Text('開設定'),
+            ),
+          ),
+        ),
+      ));
+      await t.tap(find.text('開設定'));
+      await t.pumpAndSettle();
+      expect(find.text('對話設定'), findsOneWidget);
+      expect(t.takeException(), isNull);
+      if (how == '返回') {
+        await t.tap(find.byTooltip('返回'));
+      } else {
+        await t.tap(find.text('完成'));
+      }
+      await t.pumpAndSettle();
+      expect(find.text('對話設定'), findsNothing);
+    });
+  }
+
   testWidgets('設定裡切亮暗會回報', (t) async {
     StyleMode? mode;
     await show(
