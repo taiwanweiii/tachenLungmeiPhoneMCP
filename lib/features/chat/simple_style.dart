@@ -1,16 +1,68 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// 簡易模式的畫面風格。選一個風格會換掉整個簡易模式畫面（背景、狀態卡、文字對話、
-/// 已選清單、底部按鈕、麥克風），不是只換麥克風。設計稿：畫布「底部按鈕風格」A～D。
-/// [classic]：傳統（原本的兩張大卡片＋最下面一排），完全不變，也是預設。
+/// 整個 App 的畫面風格。選一個風格會換掉所有頁面的配色、圓角（聊天、設定、技能、對話框），
+/// 簡易模式另外換成新版面（狀態卡、底部目錄／麥克風／打字）。設計稿：畫布「底部按鈕風格」A～D。
+/// [classic]：傳統（原本的配色與簡易模式版面），完全不變，也是預設。
+/// 每個風格都有亮色、深色兩套，由 [StyleMode] 決定（預設跟手機系統）。
 enum SimpleStyle { classic, neon, wave, orb, hud }
+
+/// 亮色／深色：跟系統、固定亮色、固定深色
+enum StyleMode { system, light, dark }
 
 /// 麥克風（底部大按鈕）目前的狀態
 enum MicPhase { idle, listening, thinking, speaking }
+
+/// 目前選的風格與亮暗，整個 App 共用（MaterialApp 聽這兩個值換主題）。存在手機上。
+class AppStyle {
+  AppStyle._();
+  static final style = ValueNotifier<SimpleStyle>(SimpleStyle.classic);
+  static final mode = ValueNotifier<StyleMode>(StyleMode.system);
+  static const _kMode = 'style_mode';
+
+  /// App 一啟動就讀，畫面出來前換好（沒存過：傳統＋跟系統）
+  static Future<void> load() async {
+    style.value = await SimpleStyleSpec.load();
+    try {
+      final p = await SharedPreferences.getInstance();
+      final v = p.getString(_kMode);
+      mode.value =
+          StyleMode.values.firstWhere((m) => m.name == v, orElse: () => StyleMode.system);
+    } catch (_) {}
+  }
+
+  static void setStyle(SimpleStyle s) {
+    style.value = s;
+    unawaited(SimpleStyleSpec.save(s));
+  }
+
+  static void setMode(StyleMode m) {
+    mode.value = m;
+    unawaited(() async {
+      try {
+        final p = await SharedPreferences.getInstance();
+        await p.setString(_kMode, m.name);
+      } catch (_) {}
+    }());
+  }
+
+  static ThemeMode get themeMode => switch (mode.value) {
+        StyleMode.system => ThemeMode.system,
+        StyleMode.light => ThemeMode.light,
+        StyleMode.dark => ThemeMode.dark,
+      };
+
+  /// 套上風格後的主題；傳統直接用 App 原本的主題
+  static ThemeData theme(ThemeData base) {
+    final s = style.value;
+    if (s == SimpleStyle.classic) return base;
+    return SimpleStyleSpec.of(s, dark: base.brightness == Brightness.dark).apply(base);
+  }
+}
 
 class SimpleStyleSpec {
   const SimpleStyleSpec({
@@ -28,6 +80,7 @@ class SimpleStyleSpec {
     required this.radius,
     required this.accents,
     this.mono = false,
+    this.brightness = Brightness.dark,
   });
 
   final SimpleStyle id;
@@ -42,18 +95,151 @@ class SimpleStyleSpec {
   /// 科技字（等寬英文小標）
   final bool mono;
 
+  /// 這套是亮色還是深色
+  final Brightness brightness;
+  bool get isDark => brightness == Brightness.dark;
+
   Color accent(MicPhase p) => accents[p]!.first;
 
-  /// 新版面的四個風格（傳統不在這裡，它用原本的版面）
+  /// 麥克風、膠囊、HUD 方框的底色（深色是黑玻璃，亮色是白瓷）
+  List<Color> get core => isDark
+      ? [Color.lerp(card, Colors.white, 0.04)!, bg]
+      : [Colors.white, Color.lerp(card, primary, 0.06)!];
+
+  /// 沒在作用的聲波條
+  Color get idleBar => muted.withValues(alpha: isDark ? 0.35 : 0.3);
+
+  /// 陰影：亮色淡很多，不然像髒污
+  Color get shadow => isDark ? const Color(0x80000000) : const Color(0x1F1A2340);
+
+  /// 新版面的四個風格（深色；傳統不在這裡，它用原本的版面）
   static const all = [neon, wave, orb, hud];
 
-  static SimpleStyleSpec of(SimpleStyle s) => switch (s) {
-        SimpleStyle.classic => classic,
-        SimpleStyle.neon => neon,
-        SimpleStyle.wave => wave,
-        SimpleStyle.orb => orb,
-        SimpleStyle.hud => hud,
+  /// 設定裡列出來的五個（含傳統），依目前亮暗
+  static List<SimpleStyleSpec> choices({required bool dark}) =>
+      [for (final s in SimpleStyle.values) of(s, dark: dark)];
+
+  static SimpleStyleSpec of(SimpleStyle s, {bool dark = true}) => switch (s) {
+        SimpleStyle.classic => dark ? classic : classicLight,
+        SimpleStyle.neon => dark ? neon : neonLight,
+        SimpleStyle.wave => dark ? wave : waveLight,
+        SimpleStyle.orb => dark ? orb : orbLight,
+        SimpleStyle.hud => dark ? hud : hudLight,
       };
+
+  /// 傳統亮色（設定裡的預覽用）
+  static const classicLight = SimpleStyleSpec(
+    id: SimpleStyle.classic,
+    name: '傳統',
+    desc: '原本的樣子',
+    brightness: Brightness.light,
+    bg: Color(0xFFF9F9FF),
+    card: Color(0xFFFFFFFF),
+    cardBorder: Color(0xFFC4C6D0),
+    chipBg: Color(0xFFE1E2EC),
+    text: Color(0xFF191C20),
+    muted: Color(0xFF44474E),
+    primary: Color(0xFF415F91),
+    onPrimary: Color(0xFFFFFFFF),
+    radius: 20,
+    accents: {
+      MicPhase.idle: [Color(0xFF415F91)],
+      MicPhase.listening: [Color(0xFFBA1A1A)],
+      MicPhase.thinking: [Color(0xFF415F91)],
+      MicPhase.speaking: [Color(0xFF415F91)],
+    },
+  );
+
+  // ── 亮色版：同一套造型，白底、顏色加深一點才看得清楚 ──────────
+  static const neonLight = SimpleStyleSpec(
+    id: SimpleStyle.neon,
+    name: 'A・霓虹光環',
+    desc: '旋轉漸層光圈',
+    brightness: Brightness.light,
+    bg: Color(0xFFF3F6FC),
+    card: Color(0xFFFFFFFF),
+    cardBorder: Color(0x405B8CFF),
+    chipBg: Color(0xFFE6ECF8),
+    text: Color(0xFF14213D),
+    muted: Color(0xFF586379),
+    primary: Color(0xFF2F62E9),
+    onPrimary: Color(0xFFFFFFFF),
+    radius: 20,
+    accents: {
+      MicPhase.idle: [Color(0xFF00B4D8), Color(0xFF5B8CFF), Color(0xFFB26BFF)],
+      MicPhase.listening: [Color(0xFFF0435A), Color(0xFFFF9F43), Color(0xFFFF2E93)],
+      MicPhase.thinking: [Color(0xFF5B8CFF), Color(0xFFCAD7F7), Color(0xFF5B8CFF)],
+      MicPhase.speaking: [Color(0xFF00B37E), Color(0xFF00B4D8), Color(0xFF5B8CFF)],
+    },
+  );
+
+  static const waveLight = SimpleStyleSpec(
+    id: SimpleStyle.wave,
+    name: 'B・聲波膠囊',
+    desc: '膠囊底座＋聲波',
+    brightness: Brightness.light,
+    bg: Color(0xFFF4F5F9),
+    card: Color(0xFFFFFFFF),
+    cardBorder: Color(0x17000000),
+    chipBg: Color(0xFFEBEDF3),
+    text: Color(0xFF1A1E27),
+    muted: Color(0xFF5D6473),
+    primary: Color(0xFF3D63E0),
+    onPrimary: Color(0xFFFFFFFF),
+    radius: 26,
+    accents: {
+      MicPhase.idle: [Color(0xFF00B8D9), Color(0xFF5B8CFF), Color(0xFF9B6BFF)],
+      MicPhase.listening: [Color(0xFFFF8A57), Color(0xFFF2475A)],
+      MicPhase.thinking: [Color(0xFF7FA6FF), Color(0xFFB9C9F2)],
+      MicPhase.speaking: [Color(0xFF00B8D9), Color(0xFF5B8CFF)],
+    },
+  );
+
+  static const orbLight = SimpleStyleSpec(
+    id: SimpleStyle.orb,
+    name: 'C・全息光球',
+    desc: '會呼吸的光球',
+    brightness: Brightness.light,
+    bg: Color(0xFFF2F3F8),
+    card: Color(0xFFFFFFFF),
+    cardBorder: Color(0x14000000),
+    chipBg: Color(0xFFE9EBF2),
+    text: Color(0xFF1B1E27),
+    muted: Color(0xFF5F6578),
+    primary: Color(0xFF4A5FD6),
+    onPrimary: Color(0xFFFFFFFF),
+    radius: 26,
+    accents: {
+      MicPhase.idle: [Color(0xFF2F7BFF), Color(0xFF8A5CFF), Color(0xFFD5F8FF), Color(0xFF2A3F8F)],
+      MicPhase.listening: [Color(0xFFFF7A4D), Color(0xFFFF3D77), Color(0xFFFFE6DC), Color(0xFF8A1E45)],
+      MicPhase.thinking: [Color(0xFF6F82C0), Color(0xFF97A6D9), Color(0xFFEFF3FF), Color(0xFF3A4A7A)],
+      MicPhase.speaking: [Color(0xFF00C49A), Color(0xFF00A3E8), Color(0xFFDDFFF6), Color(0xFF0A5470)],
+    },
+  );
+
+  /// HUD 亮色：藍圖紙
+  static const hudLight = SimpleStyleSpec(
+    id: SimpleStyle.hud,
+    name: 'D・科幻 HUD',
+    desc: '八角框＋掃描線',
+    brightness: Brightness.light,
+    bg: Color(0xFFEEF6F8),
+    card: Color(0xFFFAFDFE),
+    cardBorder: Color(0x66008EA6),
+    chipBg: Color(0xFFDCEFF3),
+    text: Color(0xFF06303A),
+    muted: Color(0xFF4A6970),
+    primary: Color(0xFF008EA6),
+    onPrimary: Color(0xFFFFFFFF),
+    radius: 4,
+    mono: true,
+    accents: {
+      MicPhase.idle: [Color(0xFF008EA6)],
+      MicPhase.listening: [Color(0xFFD92B4B)],
+      MicPhase.thinking: [Color(0xFFB57A00)],
+      MicPhase.speaking: [Color(0xFF00975A)],
+    },
+  );
 
   /// 傳統：原本的版面與 App 主題（這份只用在設定裡的預覽和名稱）
   static const classic = SimpleStyleSpec(
@@ -183,35 +369,64 @@ class SimpleStyleSpec {
     } catch (_) {}
   }
 
-  /// 套到簡易模式整個畫面：深色、這個風格的顏色與圓角。
-  /// 保留 App 原本的按鈕、輸入框等設定，只換顏色。
+  /// 套到整個 App（或簡易模式畫面）：這個風格的顏色與圓角。
+  /// 保留 App 原本的按鈕、輸入框等設定，只換顏色和圓角。
   ThemeData apply(ThemeData base) {
-    final cs = ColorScheme.fromSeed(seedColor: primary, brightness: Brightness.dark).copyWith(
+    final cs = ColorScheme.fromSeed(seedColor: primary, brightness: brightness).copyWith(
       primary: primary,
       onPrimary: onPrimary,
-      primaryContainer: Color.lerp(bg, primary, 0.28),
+      primaryContainer: Color.lerp(isDark ? bg : Colors.white, primary, isDark ? 0.28 : 0.16),
       onPrimaryContainer: text,
-      secondaryContainer: Color.lerp(card, primary, 0.18),
+      secondaryContainer: Color.lerp(card, primary, isDark ? 0.18 : 0.12),
       onSecondaryContainer: text,
       surface: bg,
       onSurface: text,
       onSurfaceVariant: muted,
-      surfaceContainerLowest: bg,
+      surfaceContainerLowest: isDark ? bg : Colors.white,
       surfaceContainerLow: card,
       surfaceContainer: card,
-      surfaceContainerHigh: Color.lerp(card, Colors.white, 0.05),
+      surfaceContainerHigh: Color.lerp(card, isDark ? Colors.white : primary, isDark ? 0.05 : 0.04),
       surfaceContainerHighest: chipBg,
       outline: muted,
       outlineVariant: cardBorder,
     );
     final text0 = base.textTheme.apply(bodyColor: text, displayColor: text);
+    final shape = RoundedRectangleBorder(borderRadius: BorderRadius.circular(radius));
+    final btnShape = WidgetStatePropertyAll<OutlinedBorder>(
+        RoundedRectangleBorder(borderRadius: BorderRadius.circular(radius.clamp(4, 16))));
     return ThemeData.from(colorScheme: cs, textTheme: text0, useMaterial3: true).copyWith(
       scaffoldBackgroundColor: bg,
-      filledButtonTheme: base.filledButtonTheme,
-      outlinedButtonTheme: base.outlinedButtonTheme,
+      filledButtonTheme: FilledButtonThemeData(
+          style: (base.filledButtonTheme.style ?? const ButtonStyle()).copyWith(shape: btnShape)),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+          style: (base.outlinedButtonTheme.style ?? const ButtonStyle()).copyWith(shape: btnShape)),
       textButtonTheme: base.textButtonTheme,
       inputDecorationTheme: base.inputDecorationTheme,
       dividerColor: cardBorder,
+      appBarTheme: (base.appBarTheme).copyWith(
+        backgroundColor: bg,
+        foregroundColor: text,
+        surfaceTintColor: Colors.transparent,
+      ),
+      cardTheme: CardThemeData(color: card, surfaceTintColor: Colors.transparent, shape: shape),
+      dialogTheme: DialogThemeData(backgroundColor: card, surfaceTintColor: Colors.transparent, shape: shape),
+      bottomSheetTheme: BottomSheetThemeData(
+        backgroundColor: card,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(radius.clamp(4, 28)))),
+      ),
+      popupMenuTheme: PopupMenuThemeData(color: card, surfaceTintColor: Colors.transparent),
+      chipTheme: ChipThemeData(
+        backgroundColor: chipBg,
+        side: BorderSide(color: cardBorder),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radius.clamp(4, 10))),
+      ),
+      snackBarTheme: SnackBarThemeData(
+        backgroundColor: isDark ? chipBg : text,
+        contentTextStyle: TextStyle(color: isDark ? text : bg),
+        behavior: SnackBarBehavior.floating,
+      ),
     );
   }
 
@@ -246,7 +461,7 @@ class SimpleBackdrop extends StatelessWidget {
       color: spec.bg,
       child: Stack(children: [
         if (spec.id == SimpleStyle.hud)
-          Positioned.fill(child: CustomPaint(painter: _GridPainter(spec.primary))),
+          Positioned.fill(child: CustomPaint(painter: _GridPainter(spec.primary.withValues(alpha: spec.isDark ? 0.05 : 0.08)))),
         if (spec.id == SimpleStyle.orb)
           Positioned(
             left: 0,
@@ -276,7 +491,7 @@ class _GridPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final p = Paint()
-      ..color = color.withValues(alpha: 0.05)
+      ..color = color
       ..strokeWidth = 1;
     for (var x = 0.0; x < size.width; x += 22) {
       canvas.drawLine(Offset(x, 0), Offset(x, size.height), p);
@@ -434,7 +649,7 @@ class _SimpleDockState extends State<SimpleDock> with SingleTickerProviderStateM
           child: Tooltip(
             message: tip,
             child: Material(
-              color: Colors.white.withValues(alpha: 0.05),
+              color: s.text.withValues(alpha: 0.05),
               shape: const CircleBorder(),
               child: InkWell(
                 customBorder: const CircleBorder(),
@@ -454,13 +669,13 @@ class _SimpleDockState extends State<SimpleDock> with SingleTickerProviderStateM
             Container(
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(34),
-                gradient: const LinearGradient(
+                gradient: LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
-                    colors: [Color(0xFF1E222C), Color(0xFF13161D)]),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-                boxShadow: const [
-                  BoxShadow(color: Color(0x80000000), blurRadius: 28, offset: Offset(0, 10)),
+                    colors: s.core),
+                border: Border.all(color: s.text.withValues(alpha: 0.08)),
+                boxShadow: [
+                  BoxShadow(color: s.shadow, blurRadius: 28, offset: const Offset(0, 10)),
                 ],
               ),
               padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -514,7 +729,7 @@ class _SimpleDockState extends State<SimpleDock> with SingleTickerProviderStateM
                   op = 0.25 + 0.75 * (0.5 + 0.5 * math.sin(t * 0.6 + i * 0.7));
                 case MicPhase.idle:
                   h = 4;
-                  c = const Color(0xFF3A4150);
+                  c = s.idleBar;
               }
               return Opacity(
                 opacity: op,
@@ -573,7 +788,7 @@ class _SideButton extends StatelessWidget {
           child: GestureDetector(
             onTap: onTap,
             child: CustomPaint(
-              painter: _TabPainter(s.primary, leftSide: leftSide),
+              painter: _TabPainter(s.primary, fill: s.card, leftSide: leftSide),
               child: SizedBox(
                 width: 84,
                 height: 52,
@@ -623,8 +838,8 @@ class _SideButton extends StatelessWidget {
 }
 
 class _TabPainter extends CustomPainter {
-  _TabPainter(this.color, {required this.leftSide});
-  final Color color;
+  _TabPainter(this.color, {required this.fill, required this.leftSide});
+  final Color color, fill;
   final bool leftSide;
 
   @override
@@ -643,7 +858,7 @@ class _TabPainter extends CustomPainter {
           ..lineTo(w, h)
           ..lineTo(k, h)
           ..close());
-    canvas.drawPath(path, Paint()..color = const Color(0xFF08121A));
+    canvas.drawPath(path, Paint()..color = fill);
     canvas.drawPath(
         path,
         Paint()
@@ -653,7 +868,7 @@ class _TabPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_TabPainter old) => old.color != color;
+  bool shouldRepaint(_TabPainter old) => old.color != color || old.fill != fill;
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -812,17 +1027,17 @@ class _MicButton extends StatelessWidget {
         width: size - 8,
         height: size - 8,
         alignment: Alignment.center,
-        decoration: const BoxDecoration(
+        decoration: BoxDecoration(
           shape: BoxShape.circle,
           gradient: RadialGradient(
-            center: Alignment(0, -0.4),
-            colors: [Color(0xFF1F2738), Color(0xFF0B0E14)],
+            center: const Alignment(0, -0.4),
+            colors: spec.isDark ? const [Color(0xFF1F2738), Color(0xFF0B0E14)] : spec.core,
           ),
         ),
         child: switch (phase) {
-          MicPhase.thinking => _dots(const Color(0xFF8FB4FF)),
+          MicPhase.thinking => _dots(spec.isDark ? const Color(0xFF8FB4FF) : spec.primary),
           MicPhase.speaking => _eq(c),
-          _ => _icon(const Color(0xFFEAF6FF), 34),
+          _ => _icon(spec.isDark ? const Color(0xFFEAF6FF) : spec.text, 34),
         },
       ),
     ]);
@@ -856,8 +1071,12 @@ class _MicButton extends StatelessWidget {
           ],
         ),
         child: phase == MicPhase.speaking
-            ? const Icon(Icons.stop_rounded, color: Color(0xFF04132B), size: 30)
-            : _icon(phase == MicPhase.thinking ? const Color(0xFF9FB6E6) : const Color(0xFF04132B), 32),
+            ? Icon(Icons.stop_rounded, color: spec.onPrimary, size: 30)
+            : _icon(
+                phase == MicPhase.thinking
+                    ? (spec.isDark ? const Color(0xFF9FB6E6) : Colors.white)
+                    : spec.onPrimary,
+                32),
       ),
     ]);
   }
@@ -936,7 +1155,7 @@ class _MicButton extends StatelessWidget {
         opacity: phase == MicPhase.listening ? 0.55 + 0.45 * (0.5 + 0.5 * math.sin(_v * 2 * math.pi * 4)) : 1,
         child: CustomPaint(
           size: Size.square(size),
-          painter: _OctagonPainter(a),
+          painter: _OctagonPainter(a, fill: spec.card),
         ),
       ),
       ClipPath(
@@ -1010,12 +1229,12 @@ class _OctagonClipper extends CustomClipper<Path> {
 }
 
 class _OctagonPainter extends CustomPainter {
-  _OctagonPainter(this.color);
-  final Color color;
+  _OctagonPainter(this.color, {this.fill = const Color(0xFF060A0F)});
+  final Color color, fill;
   @override
   void paint(Canvas canvas, Size size) {
     final p = _octagon(size);
-    canvas.drawPath(p, Paint()..color = const Color(0xFF060A0F));
+    canvas.drawPath(p, Paint()..color = fill);
     canvas.drawPath(
         p,
         Paint()
@@ -1026,7 +1245,7 @@ class _OctagonPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_OctagonPainter old) => old.color != color;
+  bool shouldRepaint(_OctagonPainter old) => old.color != color || old.fill != fill;
 }
 
 class _BracketPainter extends CustomPainter {
@@ -1212,8 +1431,11 @@ class SimpleStyleSwatch extends StatelessWidget {
       SimpleStyle.classic => Container(
           width: 34,
           height: 34,
-          decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0xFF284777)),
-          child: const Icon(Icons.mic_rounded, size: 18, color: Color(0xFFD6E3FF)),
+          decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: s.isDark ? const Color(0xFF284777) : const Color(0xFFD6E3FF)),
+          child: Icon(Icons.mic_rounded,
+              size: 18, color: s.isDark ? const Color(0xFFD6E3FF) : const Color(0xFF001B3E)),
         ),
       SimpleStyle.neon => Container(
           width: 34,
@@ -1221,8 +1443,9 @@ class SimpleStyleSwatch extends StatelessWidget {
           padding: const EdgeInsets.all(3),
           decoration: BoxDecoration(shape: BoxShape.circle, gradient: SweepGradient(colors: [...c, c.first])),
           child: Container(
-              decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0xFF0B0E14)),
-              child: const Icon(Icons.mic_rounded, size: 16, color: Colors.white)),
+              decoration: BoxDecoration(
+                  shape: BoxShape.circle, color: s.isDark ? const Color(0xFF0B0E14) : Colors.white),
+              child: Icon(Icons.mic_rounded, size: 16, color: s.isDark ? Colors.white : s.text)),
         ),
       SimpleStyle.wave => Container(
           width: 34,
@@ -1242,7 +1465,7 @@ class SimpleStyleSwatch extends StatelessWidget {
         ),
       SimpleStyle.hud => CustomPaint(
           size: const Size.square(34),
-          painter: _OctagonPainter(s.primary),
+          painter: _OctagonPainter(s.primary, fill: s.card),
           child: SizedBox(
               width: 34, height: 34, child: Icon(Icons.mic_none_rounded, size: 16, color: s.primary)),
         ),
@@ -1261,7 +1484,7 @@ class SimpleStyleSwatch extends StatelessWidget {
             color: s.bg,
             borderRadius: BorderRadius.circular(14),
             border: Border.all(
-                color: selected ? s.primary : Colors.white.withValues(alpha: 0.12),
+                color: selected ? s.primary : s.text.withValues(alpha: 0.14),
                 width: selected ? 2 : 1),
           ),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -1275,5 +1498,52 @@ class SimpleStyleSwatch extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// 畫面風格選擇：五個風格（含傳統）＋亮色／深色／跟系統。設定頁和對話設定都用這個。
+class StylePicker extends StatelessWidget {
+  const StylePicker({
+    super.key,
+    required this.style,
+    required this.mode,
+    required this.onStyle,
+    required this.onMode,
+  });
+
+  final SimpleStyle style;
+  final StyleMode mode;
+  final ValueChanged<SimpleStyle> onStyle;
+  final ValueChanged<StyleMode> onMode;
+
+  @override
+  Widget build(BuildContext context) {
+    // 預覽跟著現在畫面的亮暗（選了「亮色」，預覽也變亮色）
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+      SizedBox(
+        width: double.infinity,
+        child: SegmentedButton<StyleMode>(
+          showSelectedIcon: false,
+          segments: const [
+            ButtonSegment(value: StyleMode.light, icon: Icon(Icons.light_mode_outlined, size: 18), label: Text('亮色')),
+            ButtonSegment(value: StyleMode.dark, icon: Icon(Icons.dark_mode_outlined, size: 18), label: Text('深色')),
+            ButtonSegment(value: StyleMode.system, icon: Icon(Icons.brightness_auto_outlined, size: 18), label: Text('跟系統')),
+          ],
+          selected: {mode},
+          onSelectionChanged: (v) => onMode(v.first),
+        ),
+      ),
+      const SizedBox(height: 12),
+      // 放不下就換行，五個都直接看得到
+      Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          for (final s in SimpleStyleSpec.choices(dark: dark))
+            SimpleStyleSwatch(spec: s, selected: style == s.id, onTap: () => onStyle(s.id)),
+        ],
+      ),
+    ]);
   }
 }

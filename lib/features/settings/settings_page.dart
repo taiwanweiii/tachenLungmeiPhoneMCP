@@ -15,6 +15,7 @@ import 'package:curtain_mcp_flutter/services/chat_orchestrator.dart';
 import 'package:curtain_mcp_flutter/services/ollama_service.dart';
 import 'package:curtain_mcp_flutter/services/web_session.dart';
 import 'package:curtain_mcp_flutter/features/cabinet/web_url_field.dart';
+import 'package:curtain_mcp_flutter/features/chat/simple_style.dart';
 
 
 
@@ -348,6 +349,29 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       body: ListView(
         padding: const EdgeInsets.all(24),
         children: [
+
+          // ── 畫面風格（整個 App）────────────────────────
+          _SectionCard(
+            icon: Icons.palette_outlined,
+            title: '畫面風格',
+            children: [
+              Text('整個 App 一起換顏色；簡易模式另外換成新的麥克風版面。「傳統」是原本的樣子。',
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+              const SizedBox(height: 12),
+              AnimatedBuilder(
+                animation: Listenable.merge([AppStyle.style, AppStyle.mode]),
+                builder: (_, __) => StylePicker(
+                  style: AppStyle.style.value,
+                  mode: AppStyle.mode.value,
+                  onStyle: AppStyle.setStyle,
+                  onMode: AppStyle.setMode,
+                ),
+              ),
+            ],
+          ).animate().fadeIn(delay: 50.ms).slideY(begin: 0.1),
+
+          const SizedBox(height: 20),
 
           // ── ① Ollama 端點管理 ────────────────────────
           _SectionCard(

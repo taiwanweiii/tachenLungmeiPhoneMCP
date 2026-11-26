@@ -8,11 +8,13 @@ import 'core/di/service_locator.dart';
 import 'services/mcp_client_service.dart';
 import 'services/web_session.dart';
 import 'app.dart';
+import 'features/chat/simple_style.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await dotenv.load(fileName: '.env');
   await setupServiceLocator();
+  await AppStyle.load(); // 畫面風格先讀好，第一個畫面就是對的顏色
   runApp(const ProviderScope(child: CurtainMcpApp()));
   // 畫面先出來，登入在背景做，失敗不影響使用
   unawaited(_autoLogin());

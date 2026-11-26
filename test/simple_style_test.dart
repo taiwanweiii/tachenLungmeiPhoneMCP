@@ -27,11 +27,13 @@ void main() {
     g.registerSingleton<CabinetWebController>(CabinetWebController(s));
   });
 
-  Future<void> show(WidgetTester t, Widget child) async {
+  Future<void> show(WidgetTester t, Widget child, {bool dark = false}) async {
     t.view.physicalSize = const Size(780, 1688); // 390 x 844
     t.view.devicePixelRatio = 2;
     addTearDown(t.view.reset);
-    await t.pumpWidget(MaterialApp(theme: _appTheme(), home: Scaffold(body: child)));
+    await t.pumpWidget(MaterialApp(
+        theme: dark ? ThemeData(useMaterial3: true, brightness: Brightness.dark) : _appTheme(),
+        home: Scaffold(body: child)));
     // 動畫會一直跑，不能 pumpAndSettle
     await t.pump(const Duration(milliseconds: 300));
   }
@@ -43,9 +45,10 @@ void main() {
     '回答': (rec: false, load: false, speak: true),
   };
 
+  for (final dark in [false, true])
   for (final style in SimpleStyle.values) {
     for (final e in phases.entries) {
-      testWidgets('風格 ${style.name}・${e.key}：手機畫面畫得出來', (t) async {
+      testWidgets('風格 ${style.name}・${dark ? '深色' : '亮色'}・${e.key}：手機畫面畫得出來', (t) async {
         await show(
           t,
           buildSimpleViewForTest(
@@ -57,6 +60,7 @@ void main() {
             isSpeaking: e.value.speak,
             continuous: true,
           ),
+          dark: dark,
         );
         expect(t.takeException(), isNull);
         if (style == SimpleStyle.classic) {
@@ -122,11 +126,71 @@ void main() {
     await t.tap(find.text('全息光球'));
     await t.pump();
     expect(picked, SimpleStyle.orb);
+    // 亮色／深色／跟系統
+    for (final m in ['亮色', '深色', '跟系統']) {
+      expect(find.text(m), findsOneWidget, reason: m);
+    }
+  });
+
+  testWidgets('設定裡切亮暗會回報', (t) async {
+    StyleMode? mode;
+    await show(
+      t,
+      ConversationSettingsSheet(
+        initial: VoiceConversationSettings(),
+        onChanged: (_) {},
+        onStyleChanged: (_) {},
+        onModeChanged: (m) => mode = m,
+      ),
+    );
+    await t.tap(find.text('深色'));
+    await t.pump();
+    expect(mode, StyleMode.dark);
+    await t.tap(find.text('亮色'));
+    await t.pump();
+    expect(mode, StyleMode.light);
   });
 
   test('風格存在手機上；沒選過是傳統', () async {
     expect(await SimpleStyleSpec.load(), SimpleStyle.classic);
     await SimpleStyleSpec.save(SimpleStyle.hud);
     expect(await SimpleStyleSpec.load(), SimpleStyle.hud);
+  });
+
+  test('亮暗存在手機上；沒選過是跟系統', () async {
+    await AppStyle.load();
+    expect(AppStyle.mode.value, StyleMode.system);
+    expect(AppStyle.themeMode, ThemeMode.system);
+    AppStyle.setMode(StyleMode.light);
+    AppStyle.setStyle(SimpleStyle.neon);
+    await Future<void>.delayed(Duration.zero);
+    AppStyle.mode.value = StyleMode.system;
+    AppStyle.style.value = SimpleStyle.classic;
+    await AppStyle.load();
+    expect((AppStyle.style.value, AppStyle.mode.value), (SimpleStyle.neon, StyleMode.light));
+    expect(AppStyle.themeMode, ThemeMode.light);
+    AppStyle.style.value = SimpleStyle.classic;
+    AppStyle.mode.value = StyleMode.system;
+  });
+
+  test('整個 App 的主題：傳統不變；其他風格換底色、亮色版是亮的', () {
+    final light = ThemeData(useMaterial3: true, brightness: Brightness.light);
+    final dark = ThemeData(useMaterial3: true, brightness: Brightness.dark);
+    AppStyle.style.value = SimpleStyle.classic;
+    expect(identical(AppStyle.theme(light), light), isTrue);
+    for (final s in SimpleStyleSpec.all) {
+      AppStyle.style.value = s.id;
+      final l = AppStyle.theme(light), d = AppStyle.theme(dark);
+      expect(l.brightness, Brightness.light, reason: s.name);
+      expect(d.brightness, Brightness.dark, reason: s.name);
+      expect(l.scaffoldBackgroundColor, SimpleStyleSpec.of(s.id, dark: false).bg);
+      expect(d.scaffoldBackgroundColor, s.bg);
+      expect(l.appBarTheme.backgroundColor, SimpleStyleSpec.of(s.id, dark: false).bg);
+      // 亮色版字要夠深、底要夠亮
+      final ls = SimpleStyleSpec.of(s.id, dark: false);
+      expect(ls.bg.computeLuminance(), greaterThan(0.8), reason: s.name);
+      expect(ls.text.computeLuminance(), lessThan(0.05), reason: s.name);
+    }
+    AppStyle.style.value = SimpleStyle.classic;
   });
 }

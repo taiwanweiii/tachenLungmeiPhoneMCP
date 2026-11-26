@@ -12,12 +12,16 @@ class ConversationSettingsSheet extends StatefulWidget {
     required this.onChanged,
     this.initialStyle = SimpleStyle.classic,
     this.onStyleChanged,
+    this.initialMode = StyleMode.system,
+    this.onModeChanged,
   });
 
   final VoiceConversationSettings initial;
   final void Function(VoiceConversationSettings) onChanged;
   final SimpleStyle initialStyle;
   final void Function(SimpleStyle)? onStyleChanged;
+  final StyleMode initialMode;
+  final void Function(StyleMode)? onModeChanged;
 
   @override
   State<ConversationSettingsSheet> createState() => _ConversationSettingsSheetState();
@@ -29,6 +33,7 @@ class _ConversationSettingsSheetState extends State<ConversationSettingsSheet> {
   late double _endSilence = widget.initial.endSilenceSeconds;
   late final List<String> _keywords = List.of(widget.initial.keywords);
   late SimpleStyle _style = widget.initialStyle;
+  late StyleMode _mode = widget.initialMode;
   final _kwCtrl = TextEditingController();
 
   @override
@@ -70,30 +75,26 @@ class _ConversationSettingsSheetState extends State<ConversationSettingsSheet> {
             children: [
               Text('對話設定', style: theme.textTheme.titleLarge),
               const SizedBox(height: 4),
-              Text('簡易模式用；每次改動會馬上存起來', style: muted),
+              Text('每次改動會馬上存起來', style: muted),
               const SizedBox(height: 14),
 
               if (widget.onStyleChanged != null) ...[
                 Text('畫面風格', style: theme.textTheme.titleMedium),
                 const SizedBox(height: 4),
-                Text('整個簡易模式畫面一起換（背景、卡片、按鈕、麥克風）；「傳統」是原本的樣子。',
+                Text('整個 App 一起換（聊天、簡易模式、設定頁、按鈕、麥克風）；「傳統」是原本的樣子。',
                     style: muted),
                 const SizedBox(height: 10),
-                // 放不下就換行，五個都直接看得到
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    for (final s in [SimpleStyleSpec.classic, ...SimpleStyleSpec.all])
-                      SimpleStyleSwatch(
-                        spec: s,
-                        selected: _style == s.id,
-                        onTap: () {
-                          setState(() => _style = s.id);
-                          widget.onStyleChanged?.call(s.id);
-                        },
-                      ),
-                  ],
+                StylePicker(
+                  style: _style,
+                  mode: _mode,
+                  onStyle: (s) {
+                    setState(() => _style = s);
+                    widget.onStyleChanged?.call(s);
+                  },
+                  onMode: (m) {
+                    setState(() => _mode = m);
+                    widget.onModeChanged?.call(m);
+                  },
                 ),
                 const Divider(height: 28),
               ],

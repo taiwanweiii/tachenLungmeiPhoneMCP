@@ -129,7 +129,8 @@ class _ChatPageState extends State<ChatPage> {
   bool _ttsEnabled     = true;  // 語音回覆開關（右上角音量按鈕），會記住
   static const _kTtsEnabled = 'tts_enabled';
   bool _simpleMode = false; // 左滑／右滑或點標題切換；兩個畫面共用同一份對話與選好的櫃子
-  SimpleStyle _simpleStyle = SimpleStyle.classic; // 簡易模式的畫面風格（對話設定裡選）
+  // 畫面風格（整個 App 共用，設定裡選）；簡易模式依它決定用傳統還是新版面
+  SimpleStyle get _simpleStyle => AppStyle.style.value;
   final PageController _pager = PageController(initialPage: 1);
 
   late final ChatOrchestrator _chat;
@@ -269,9 +270,7 @@ class _ChatPageState extends State<ChatPage> {
       _voice.settings = s;
       if (mounted) setState(() {});
     }));
-    unawaited(SimpleStyleSpec.load().then((s) {
-      if (mounted) setState(() => _simpleStyle = s);
-    }));
+    AppStyle.style.addListener(_onStyleChanged);
 
     _voice.setMode(VoiceMode.pushToTalk);
     _initVoice();
@@ -401,10 +400,9 @@ class _ChatPageState extends State<ChatPage> {
           if (mounted) setState(() {});
         },
         initialStyle: _simpleStyle,
-        onStyleChanged: (st) {
-          unawaited(SimpleStyleSpec.save(st));
-          if (mounted) setState(() => _simpleStyle = st);
-        },
+        onStyleChanged: AppStyle.setStyle,
+        initialMode: AppStyle.mode.value,
+        onModeChanged: AppStyle.setMode,
       ),
     );
   }
@@ -1256,13 +1254,6 @@ class _ChatPageState extends State<ChatPage> {
 
     return Scaffold(
       appBar: AppBar(
-        // 簡易模式選了 A～D 風格：上方標題列跟著換成風格的底色
-        backgroundColor: _simpleMode && _simpleStyle != SimpleStyle.classic
-            ? SimpleStyleSpec.of(_simpleStyle).bg
-            : null,
-        foregroundColor: _simpleMode && _simpleStyle != SimpleStyle.classic
-            ? SimpleStyleSpec.of(_simpleStyle).text
-            : null,
         title: Tooltip(
           message: _simpleMode ? '切換到聊天模式' : '切換到簡易模式',
           child: InkWell(
@@ -1598,8 +1589,13 @@ class _ChatPageState extends State<ChatPage> {
     );
   }
 
+  void _onStyleChanged() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void dispose() {
+    AppStyle.style.removeListener(_onStyleChanged);
     _pager.dispose();
     _revealTimer?.cancel();
     _voice.onSpeakingChanged = null;
@@ -3631,7 +3627,8 @@ class _SimpleVoiceViewState extends State<_SimpleVoiceView>
   /// 新版面（A～D 風格）：上面兩張狀態卡、中間文字對話、底部「目錄／麥克風／打字」。
   /// 整個畫面套用風格的配色（文字對話、已選清單、訂單按鈕也一起換），傳統版面不走這裡。
   Widget _buildStyled(BuildContext outer) {
-    final spec = SimpleStyleSpec.of(widget.style);
+    final spec = SimpleStyleSpec.of(widget.style,
+        dark: Theme.of(outer).brightness == Brightness.dark);
     final state = _state;
     final phase = switch (state) {
       _SimpleState.idle => MicPhase.idle,
