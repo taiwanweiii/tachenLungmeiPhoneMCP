@@ -159,6 +159,62 @@ class CabinetDraftFlow {
     }
   }
 
+  /// 建單後直接存（最快）：背景頁 [bg] 已經把這張訂單的櫃子組好、算好價格了（建單前一直在試算），
+  /// 所以不重新載入案件，直接叫它把算好的櫃子存進剛建立的案件櫃組。
+  /// 呼叫端要先確認背景頁算的清單就是這張訂單（[orderMatchesPicked]）。
+  /// 回傳 fallback=true 代表還沒寫進資料庫就停了，可以改走 [autoSave]（重新載入）；
+  /// fallback=false 又失敗代表寫到一半，不能自動重存（可能會重複），只能讓使用者手動開。
+  /// 連結不是「更新詢單」格式回傳 null。
+  Future<({bool ok, bool fallback, String message, num? price})?> saveDirect(
+      String url, CabinetWebController bg) async {
+    final p = parseLink(url);
+    if (p == null) return null;
+    ({bool ok, bool fallback, String message, num? price}) back(String m) =>
+        (ok: false, fallback: true, message: m, price: null);
+    try {
+      if (!bg.isOpen || bg.error != null) return back('背景頁沒有開著');
+      final draft = await _getDraft(p.draft);
+      final (cabinets, ids) = _pickNewCabinets(draft, p.space, p.wall);
+      if (cabinets.isEmpty) return back('草稿這面牆沒有要新增的柜子');
+      final s = await bg.saveToCase(
+        caseNo: p.caseNo,
+        roomId: p.roomId,
+        closetId: p.closetId,
+        closetName: _wallName(draft, p.space, p.wall),
+      );
+      if (s['ok'] != true) {
+        final msg = '${s['message'] ?? '存檔失敗'}';
+        if (s['stage'] != 'save') return back(msg);
+        bg.close();
+        return (ok: false, fallback: false, message: msg, price: null);
+      }
+      // 已存進案件：把這批柜子從 MCP 草稿移除（失敗不影響已存的案件）
+      unawaited(_markApplied(p.draft, ids));
+      // 背景頁的櫃子已經編成這個案號了，關掉；之後再挑櫃子會重新開來試算
+      bg.close();
+      return (ok: true, fallback: false, message: '', price: s['price'] as num?);
+    } catch (e) {
+      // 呼叫本身出錯（網頁沒回應）：不知道有沒有寫進去，不自動重存
+      bg.close();
+      return (ok: false, fallback: false, message: _reason(e), price: null);
+    }
+  }
+
+  /// 草稿裡這面牆的名稱（存檔時帶給網頁，櫃組名稱才不會被改成預設的「櫃組 1」）
+  static String? _wallName(dynamic draft, String spaceId, String wallId) {
+    if (draft is! Map) return null;
+    for (final s in (draft['spaces'] as List? ?? const [])) {
+      if (s is! Map || '${s['localId']}' != spaceId) continue;
+      for (final w in (s['walls'] as List? ?? const [])) {
+        if (w is Map && '${w['localId']}' == wallId) {
+          final n = '${w['wallName'] ?? ''}'.trim();
+          return n.isEmpty ? null : n;
+        }
+      }
+    }
+    return null;
+  }
+
   Future<void> _run(String caseNo, String roomId, String closetId,
       String draftId, String spaceId, String wallId) async {
     _draftId = null;

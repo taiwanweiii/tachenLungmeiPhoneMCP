@@ -515,11 +515,16 @@ class _ChatPageState extends State<ChatPage> {
       _isLoading = true;
     });
     _scrollToBottom();
+    // 確認前記下這張訂單的櫃子：建好後要比對背景頁算的是不是同一份
+    final orderArgs = _chat.pendingOrderArgs;
     try {
       final (content: raw, :links) = await _chat.confirmPendingOrder();
       // 有「更新詢單」連結：App 會在背景自動存檔，不用使用者再開網頁（連結留著備用）
       final autoSave = !raw.startsWith('⚠️') &&
           links.any((l) => CabinetDraftFlow.parseLink(l.url) != null);
+      // 背景頁已經把這張訂單算好了（建單前一直在試算）：直接存，不用重新載入。
+      // 要在清掉已選清單之前判斷
+      final direct = autoSave && _bgHasOrder(orderArgs);
       final content = autoSave
           ? raw.replaceFirst('請點下面連結，在網頁確認價格後按「更新詢單」完成存檔：',
               '櫃子與價格會自動存進案件，不用開網頁（下面的連結留著備用）：')
@@ -544,7 +549,7 @@ class _ChatPageState extends State<ChatPage> {
       if (autoSave) {
         // 不唸「請點連結」那一大段，存檔結果出來會再唸一次
         _voice.speakReply('已建立案件，櫃子和價格正在自動存檔');
-        unawaited(_autoSaveCabinets(links));
+        unawaited(_autoSaveCabinets(links, direct: direct));
       } else {
         _voice.speakReply(content);
       }
@@ -567,7 +572,18 @@ class _ChatPageState extends State<ChatPage> {
   /// 建單成功後，把櫃子與價格自動存進案件：在看不見的背景配置頁載入案件、
   /// 套入櫃子、算好價格後直接「更新詢單」，不用再點連結到網頁按。
   /// 失敗就照實說，並留下連結按鈕讓使用者手動開。
-  Future<void> _autoSaveCabinets(List<({String label, String url})> links) async {
+  /// 背景配置頁算好的就是這張訂單嗎（品號、數量、規格都一樣，而且已經算完）
+  bool _bgHasOrder(Map<String, dynamic>? args) {
+    final cabs = args?['cabinets'];
+    if (cabs is! List) return false;
+    if (!_quote.isOpen || _quote.error != null || _quote.syncBusy) return false;
+    if (_quoteSig != pickedSignature(_picked)) return false;
+    return orderMatchesPicked(cabs, _picked);
+  }
+
+  /// [direct]：背景頁已經算好這張訂單，先試直接存（幾秒）；還沒寫進資料庫就停了才改走重新載入
+  Future<void> _autoSaveCabinets(List<({String label, String url})> links,
+      {bool direct = false}) async {
     final targets = [
       for (final l in links)
         if (CabinetDraftFlow.parseLink(l.url) != null) l
@@ -575,13 +591,27 @@ class _ChatPageState extends State<ChatPage> {
     if (targets.isEmpty) return;
     final flow = GetIt.instance<CabinetDraftFlow>();
     final bg = GetIt.instance<CabinetWebController>(instanceName: 'quote');
+    // 背景頁只算了一面牆的櫃子：只有一個連結時才能直接存
+    final tryDirect = direct && targets.length == 1;
     setState(() => _messages.add(ChatMessage(
-        text: '櫃子與價格存檔中（約 1 分鐘，不用開畫面）…', isUser: false)));
+        text: tryDirect
+            ? '櫃子與價格存檔中（不用開畫面）…'
+            : '櫃子與價格存檔中（約 1 分鐘，不用開畫面）…',
+        isUser: false)));
     _scrollToBottom();
     final lines = <String>[];
     final failed = <({String label, String url})>[];
     for (final l in targets) {
-      final r = await flow.autoSave(l.url, bg);
+      ({bool ok, String message, num? price})? r;
+      if (tryDirect) {
+        final d = await flow.saveDirect(l.url, bg);
+        if (d != null && !d.fallback) {
+          r = (ok: d.ok, message: d.message, price: d.price);
+        } else if (d != null) {
+          debugPrint('⚠️ 直接存檔沒成功（${d.message}），改用重新載入的方式');
+        }
+      }
+      r ??= await flow.autoSave(l.url, bg);
       if (r == null) continue;
       if (r.ok) {
         lines.add('✅ ${l.label}：已存進案件'

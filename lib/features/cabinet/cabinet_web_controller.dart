@@ -903,6 +903,26 @@ class CabinetWebController extends ChangeNotifier {
         {'dryRun': dryRun}
       ]);
 
+  /// 把背景頁「已組好、已算好報價」的櫃子直接存進已建立的案件櫃組（不重新載入、不重算）。
+  /// **會直接寫入資料庫**，只能在使用者確認建立之後呼叫。dryRun=true 只演練不寫入。
+  /// 回傳的 stage：'check'＝還沒寫資料庫就停了（可以改走別的方式存）；'save'＝寫到一半失敗。
+  Future<Map<String, dynamic>> saveToCase({
+    required String caseNo,
+    required String roomId,
+    required String closetId,
+    String? closetName,
+    bool dryRun = false,
+  }) =>
+      call('saveToCase', [
+        {
+          'caseNo': caseNo,
+          'roomId': roomId,
+          'closetId': closetId,
+          if (closetName != null && closetName.isNotEmpty) 'closetName': closetName,
+          'dryRun': dryRun,
+        }
+      ]);
+
   /// 同步目前價格與櫃體數量（網頁事件沒有送到時用）
   Future<void> refreshState() async {
     final s = await getState();

@@ -299,6 +299,72 @@ void main() {
     });
   });
 
+  group('建單後直接存（背景頁已經算好，不重新載入）', () {
+    late CabinetWebController bg;
+    late FakeTransport btp;
+
+    setUp(() async {
+      mcp.hasTools = true;
+      (((mcp.draft as Map)['spaces'] as List)[0]['walls'] as List)[0]['wallName'] = '牆面1';
+      bg = CabinetWebController(session, background: true);
+      btp = FakeTransport()
+        ..replies['whenReady'] = {'ok': true}
+        ..replies['getState'] = {'ok': true, 'price': 7285, 'cabinets': []}
+        ..replies['saveToCase'] = {'ok': true, 'price': 7285};
+      // 背景頁開著（建單前一直在試算）
+      final f = bg.openNew();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      bg.attachTransport(btp);
+      await bg.onPageLoaded();
+      await f;
+    });
+
+    test('直接叫背景頁存進新案件（帶案號、空間、牆面、牆名），不重新載入、回報 MCP、關掉背景頁', () async {
+      expect(bg.isOpen, true);
+      final r = await flow.saveDirect(link, bg);
+      expect(r?.ok, true);
+      expect(r?.price, 7285);
+      final save = btp.calls.singleWhere((c) => c.$1 == 'saveToCase');
+      expect(save.$2[0], {
+        'caseNo': '261100M',
+        'roomId': 'A',
+        'closetId': '1',
+        'closetName': '牆面1',
+        'dryRun': false,
+      });
+      // 沒有重新載入案件、沒有重新套櫃子、沒有走更新詢單
+      expect(btp.calls.where((c) => c.$1 == 'applyDraft' || c.$1 == 'updateCase'), isEmpty);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      final mark = mcp.toolCalls.firstWhere((c) => c.$1 == 'mark_draft_applied');
+      expect(mark.$2['cabinets'], ['s1:w1:c1', 's1:w1:c3']);
+      expect(bg.isOpen, false);
+    });
+
+    test('還沒寫資料庫就停了（例如報價還在算）：可以改走重新載入，不回報 MCP', () async {
+      btp.replies['saveToCase'] = {'ok': false, 'stage': 'check', 'message': '報價還在計算中'};
+      final r = await flow.saveDirect(link, bg);
+      expect(r?.ok, false);
+      expect(r?.fallback, true);
+      expect(mcp.toolCalls.where((c) => c.$1 == 'mark_draft_applied'), isEmpty);
+    });
+
+    test('寫到一半失敗：不能自動重存（可能重複），關掉背景頁讓使用者手動開', () async {
+      btp.replies['saveToCase'] = {'ok': false, 'stage': 'save', 'message': '儲存櫃組失敗（HTTP 500）'};
+      final r = await flow.saveDirect(link, bg);
+      expect(r?.ok, false);
+      expect(r?.fallback, false);
+      expect(r?.message, contains('HTTP 500'));
+      expect(bg.isOpen, false);
+    });
+
+    test('背景頁沒開著：直接改走重新載入', () async {
+      bg.close();
+      final r = await flow.saveDirect(link, bg);
+      expect(r?.fallback, true);
+      expect(btp.calls.where((c) => c.$1 == 'saveToCase'), isEmpty);
+    });
+  });
+
   test('這面牆沒有新增柜子：顯示錯誤', () async {
     mcp.draft = {
       'spaces': [

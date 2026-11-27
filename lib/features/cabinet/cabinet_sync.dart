@@ -510,3 +510,54 @@ List<PickedItem> moveWall(List<PickedItem> picked, String wall,
   }
   return out;
 }
+
+/// 這張訂單（quick_order 的 cabinets）跟背景配置頁算好的已選清單是不是同一份：
+/// 品號、數量一樣，訂單上寫的每個規格都跟網站核對過的值一樣，而且全部放同一面牆
+/// （quick_order 一次只建一面牆）。一樣的話，確認建立後背景頁可以直接把算好的櫃子
+/// 存進新案件，不用重新載入、重算。有任何一點對不上就回 false（改走重新載入的舊方式）。
+bool orderMatchesPicked(List<dynamic> orderCabinets, List<PickedItem> picked) {
+  if (orderCabinets.isEmpty || picked.isEmpty) return false;
+  if (picked.any((p) => !p.verified)) return false;
+  if (picked.map((p) => p.wall ?? 'back').toSet().length > 1) return false;
+
+  String norm(Object? v) {
+    if (v is num) return v == v.roundToDouble() ? v.toInt().toString() : v.toString();
+    return '${v ?? ''}'.trim().toUpperCase();
+  }
+
+  // 已選清單依數量展開成一顆一顆，每顆帶「網站核對過的值」（沒有才用使用者選的、預設的）
+  final pool = <({String productNo, Map<String, dynamic> values})>[
+    for (final p in picked)
+      for (var i = 0; i < p.quantity; i++)
+        (
+          productNo: p.productNo.trim().toUpperCase(),
+          values: {...p.defaults, ...p.specs, ...p.actual},
+        ),
+  ];
+  if (pool.length != orderCabinets.length) return false;
+
+  final used = List<bool>.filled(pool.length, false);
+  for (final raw in orderCabinets) {
+    if (raw is! Map) return false;
+    final pn = '${raw['productNo'] ?? ''}'.trim().toUpperCase();
+    // 訂單上寫的規格：頂層欄位 + params
+    final want = <String, dynamic>{
+      for (final e in raw.entries)
+        if (e.key != 'productNo' && e.key != 'remark' && e.key != 'params' && e.value != null)
+          '${e.key}': e.value,
+      if (raw['params'] is Map)
+        for (final e in (raw['params'] as Map).entries)
+          if (e.value != null) '${e.key}': e.value,
+    };
+    var found = -1;
+    for (var i = 0; i < pool.length && found < 0; i++) {
+      if (used[i] || pool[i].productNo != pn) continue;
+      final ok = want.entries.every((w) =>
+          pool[i].values.containsKey(w.key) && norm(pool[i].values[w.key]) == norm(w.value));
+      if (ok) found = i;
+    }
+    if (found < 0) return false;
+    used[found] = true;
+  }
+  return true;
+}
