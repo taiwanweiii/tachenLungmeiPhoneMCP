@@ -194,9 +194,9 @@ class CabinetDraftFlow {
       bg.close();
       return (ok: true, fallback: false, message: '', price: s['price'] as num?);
     } catch (e) {
-      // 呼叫本身出錯（網頁沒回應）：不知道有沒有寫進去，不自動重存
-      bg.close();
-      return (ok: false, fallback: false, message: _reason(e), price: null);
+      // 例外只會來自取草稿（網頁橋接不會丟例外，錯誤都包在回傳值裡）＝還沒寫資料庫，可以改走重新載入。
+      // 舊版網頁沒有 saveToCase 也一樣：回「網頁橋接尚未就緒」、沒有 stage，會改走重新載入
+      return back(_reason(e));
     }
   }
 

@@ -357,6 +357,19 @@ void main() {
       expect(bg.isOpen, false);
     });
 
+    test('網頁還沒部署新版（沒有 saveToCase）：改走重新載入', () async {
+      btp.replies['saveToCase'] = {'ok': false, 'message': '網頁橋接尚未就緒'};
+      final r = await flow.saveDirect(link, bg);
+      expect(r?.fallback, true);
+    });
+
+    test('取草稿失敗（還沒寫資料庫）：改走重新載入', () async {
+      mcp.draft = null;
+      final r = await flow.saveDirect(link, bg);
+      expect(r?.fallback, true);
+      expect(btp.calls.where((c) => c.$1 == 'saveToCase'), isEmpty);
+    });
+
     test('背景頁沒開著：直接改走重新載入', () async {
       bg.close();
       final r = await flow.saveDirect(link, bg);
